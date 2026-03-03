@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#007AFF">
-    <title>SecagemsPro - Gestão de Estufas</title>
+    <title>PSY - Gestão de secagens, encomendas e cargas</title>
     
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -213,23 +213,25 @@
         .btn-icon:hover { background: #E5E5EA; }
         
         .btn-logout {
-            padding: 8px 16px;
+            width: 36px;
+            height: 36px;
             border: none;
-            background: #FF3B30;
+            background: #1D1D1F;
             color: white;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
+            border-radius: 50%;
+            font-size: 16px;
+            font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
             display: flex;
             align-items: center;
-            gap: 6px;
+            justify-content: center;
+            padding: 0;
         }
         .btn-logout:hover {
-            background: #FF1F13;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(255, 59, 48, 0.3);
+            background: #2D2D2F;
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }
         
         /* TABS */
@@ -1409,6 +1411,21 @@
             position: relative;
         }
         
+        /* Fullscreen mode */
+        .excel-grid-container.fullscreen-active {
+            max-height: 100vh !important;
+            border-radius: 0 !important;
+            padding: 20px;
+            background: #F5F5F7;
+        }
+        
+        .excel-grid-container:fullscreen {
+            max-height: 100vh !important;
+            border-radius: 0 !important;
+            padding: 20px;
+            background: #F5F5F7;
+        }
+        
         .excel-grid {
             width: 100%;
             border-collapse: collapse;
@@ -1418,8 +1435,10 @@
         .excel-grid th,
         .excel-grid td {
             border: 1px solid #D2D2D7;
-            padding: 6px 10px;
+            padding: 4px 10px;
             text-align: left;
+            height: 25px;
+            box-sizing: border-box;
         }
         
         .excel-grid td {
@@ -1708,8 +1727,10 @@
     <div id="login-screen">
         <div class="login-card">
             <div class="login-header">
-                <h1>🌡️ SecagemsPro</h1>
-                <p>Gestão de Estufas de Secagem</p>
+                <div style="text-align: center;">
+                    <h1 style="margin-bottom: 4px; font-size: 32px; font-weight: 700;">PSY</h1>
+                    <p style="margin: 0; font-size: 14px; color: #86868B; font-weight: 400;">Gestão de secagens, encomendas e cargas</p>
+                </div>
             </div>
             
             <div id="login-error" class="alert-danger d-none"></div>
@@ -1740,8 +1761,10 @@
             <div class="app-logo">
                 <div class="app-icon">🌡️</div>
                 <div class="app-title-text">
-                    <h1>SecagemsPro</h1>
-                    <p>Gestão de Estufas</p>
+                    <div class="app-title-text">
+                    <h1 style="margin-bottom: 2px;">PSY</h1>
+                    <p style="margin: 0; font-size: 11px; color: #86868B; font-weight: 400; line-height: 1.2;">Gestão de secagens,<br>encomendas e cargas</p>
+                </div>
                 </div>
             </div>
             
@@ -1754,18 +1777,18 @@
                 <button class="btn-icon" title="Notificações">🔔</button>
                 <button class="btn-icon" title="Definições">⚙️</button>
                 <div class="user-avatar" id="user-avatar" title="Utilizador atual">JC</div>
-                <button class="btn-logout" id="logout-btn" title="Logout">🚪 Sair</button>
+                <button class="btn-logout" id="logout-btn" title="Logout">→</button>
             </div>
         </div>
         
         <!-- Tabs -->
         <div class="tabs-container">
             <button class="tab-btn active" data-tab="planeamento">
-                📅 Planeamento
+                📅 Planeamento estufas
                 <span class="tab-badge" id="badge-planeamento">0</span>
             </button>
             <button class="tab-btn" data-tab="visualizacao">
-                📊 Visualização
+                📊 Estufas live
                 <span class="tab-badge" id="badge-visualizacao">0</span>
             </button>
             <button class="tab-btn" data-tab="encomendas">
@@ -1792,37 +1815,6 @@
                     <button class="btn-new-secagem" onclick="openNewSecagemModal()">
                         + Nova Secagem
                     </button>
-                </div>
-                
-                <div class="gantt-legend">
-                    <div class="legend-item">
-                        <div class="legend-dot" style="background: var(--estufa-1)"></div>
-                        <span>Estufa 1</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-dot" style="background: var(--estufa-2)"></div>
-                        <span>Estufa 2</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-dot" style="background: var(--estufa-3)"></div>
-                        <span>Estufa 3</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-dot" style="background: var(--estufa-4)"></div>
-                        <span>Estufa 4</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-dot" style="background: var(--estufa-5)"></div>
-                        <span>Estufa 5</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-dot" style="background: var(--estufa-6)"></div>
-                        <span>Estufa 6</span>
-                    </div>
-                    <div class="legend-item">
-                        <div class="legend-dot" style="background: var(--estufa-7)"></div>
-                        <span>Estufa 7</span>
-                    </div>
                 </div>
                 
                 <div class="gantt-card">
@@ -1892,6 +1884,7 @@
                     </div>
                     <div class="encomendas-buttons">
                         <button class="btn-secondary" id="prepopulate-month-btn" onclick="forcePrePopulateMonth()">🔄 Pré-popular Mês Completo</button>
+                        <button class="btn-secondary" id="fullscreen-btn" onclick="toggleFullscreen()">⛶ Ecrã Inteiro</button>
                     </div>
                 </div>
                 
@@ -2102,3 +2095,4 @@
     <script src="app.js"></script>
 </body>
 </html>
+
