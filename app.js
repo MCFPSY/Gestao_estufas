@@ -1,4 +1,4 @@
-// SecagemsPro - JavaScript Completo
+// PSY - Gestão de secagens, encomendas e cargas - JavaScript Completo
 // Configuração e Estado Global já está no HTML
 
 // ===================================================================
@@ -8,6 +8,15 @@ let saveQueue = new Map(); // Map<rowIndex, {fields, timestamp}>
 let saveTimer = null;
 const SAVE_DEBOUNCE_MS = 1000; // 1 segundo de inatividade
 let isSaving = false;
+
+// ===================================================================
+// PROTEÇÕES PARA USO PROLONGADO (Anti-perda de dados)
+// ===================================================================
+let autoSaveInterval = null;
+let lastActivityTime = Date.now();
+let pendingChangesCount = 0;
+const AUTO_SAVE_INTERVAL_MS = 30000; // 30 segundos
+const INACTIVITY_WARNING_MS = 300000; // 5 minutos
 
 // ===================================================================
 // SUPABASE REALTIME (Fase 2 - Sincronização Tempo Real)
@@ -155,6 +164,9 @@ function showApp() {
     document.getElementById('app').style.display = 'block';
     const initials = currentUser.email.substring(0, 2).toUpperCase();
     document.getElementById('user-avatar').textContent = initials;
+    
+    // Setup navegação do Gantt
+    setupGanttNavigation();
 }
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -456,20 +468,33 @@ function renderGantt() {
     }
 }
 
-document.getElementById('prev-day').addEventListener('click', () => {
-    currentGanttDate.setDate(currentGanttDate.getDate() - 1);
-    renderGantt();
-});
-
-document.getElementById('next-day').addEventListener('click', () => {
-    currentGanttDate.setDate(currentGanttDate.getDate() + 1);
-    renderGantt();
-});
-
-document.getElementById('today-btn').addEventListener('click', () => {
-    currentGanttDate = new Date();
-    renderGantt();
-});
+// Event listeners para navegação do Gantt
+function setupGanttNavigation() {
+    const prevBtn = document.getElementById('prev-day');
+    const nextBtn = document.getElementById('next-day');
+    const todayBtn = document.getElementById('today-btn');
+    
+    if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+            currentGanttDate.setDate(currentGanttDate.getDate() - 1);
+            renderGantt();
+        });
+    }
+    
+    if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+            currentGanttDate.setDate(currentGanttDate.getDate() + 1);
+            renderGantt();
+        });
+    }
+    
+    if (todayBtn) {
+        todayBtn.addEventListener('click', () => {
+            currentGanttDate = new Date();
+            renderGantt();
+        });
+    }
+}
 
 // DASHBOARD
 async function loadDashboard() {
@@ -1470,6 +1495,20 @@ function renderEncomendasGrid() {
             return;
         }
         
+        // Ativar proteções para uso prolongado (primeira vez apenas)
+        if (!autoSaveInterval) {
+            startAutoSave();
+            setupBeforeUnloadProtection();
+            
+            // Verificar inatividade a cada 1 minuto
+            setInterval(checkInactivity, 60000);
+            
+            // Rastrear atividade do utilizador
+            document.addEventListener('keydown', trackActivity);
+            document.addEventListener('click', trackActivity);
+            document.addEventListener('scroll', trackActivity);
+        }
+        
         // Filtrar dados pela semana ativa (se houver)
         let datesToRender = encomendasData.dates;
         let dataToRender = encomendasData.data;
@@ -1925,6 +1964,9 @@ function queueSave(rowIndex, fieldKey, value) {
     
     console.log('📦 Adicionado à fila:', `linha ${rowIndex}, campo ${fieldKey}`);
     
+    // Atualizar indicador visual
+    updatePendingChangesIndicator();
+    
     // Debounce: esperar 1 segundo de inatividade antes de processar
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
@@ -1959,6 +2001,8 @@ async function processSaveQueue() {
         });
     } finally {
         isSaving = false;
+        // Atualizar indicador visual
+        updatePendingChangesIndicator();
     }
 }
 
@@ -2025,6 +2069,92 @@ async function saveRowData(rowIndex, fields) {
     } catch (error) {
         console.error('❌ Erro em saveRowData:', error);
         throw error;
+    }
+}
+
+// ===================================================================
+// PROTEÇÕES PARA USO PROLONGADO
+// ===================================================================
+
+// Auto-save periódico (força save a cada 30 segundos se houver mudanças pendentes)
+function startAutoSave() {
+    if (autoSaveInterval) return; // Já está rodando
+    
+    autoSaveInterval = setInterval(() => {
+        if (saveQueue.size > 0) {
+            console.log('🔄 Auto-save: Salvando mudanças pendentes...');
+            processSaveQueue();
+        }
+    }, AUTO_SAVE_INTERVAL_MS);
+    
+    console.log('✅ Auto-save ativado (a cada 30 segundos)');
+}
+
+function stopAutoSave() {
+    if (autoSaveInterval) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
+        console.log('⏹️ Auto-save desativado');
+    }
+}
+
+// Detectar inatividade (avisar utilizador após 5 min sem atividade)
+function trackActivity() {
+    lastActivityTime = Date.now();
+}
+
+function checkInactivity() {
+    const inactiveTime = Date.now() - lastActivityTime;
+    
+    if (inactiveTime > INACTIVITY_WARNING_MS && saveQueue.size > 0) {
+        console.warn('⚠️ Inativo há 5 minutos com mudanças pendentes!');
+        // Forçar save imediato
+        processSaveQueue();
+        showToast('⚠️ Mudanças salvas automaticamente (inatividade detectada)', 'warning');
+    }
+}
+
+// Avisar antes de fechar página se houver mudanças não salvas
+function setupBeforeUnloadProtection() {
+    window.addEventListener('beforeunload', (e) => {
+        if (saveQueue.size > 0 || isSaving) {
+            e.preventDefault();
+            e.returnValue = 'Você tem mudanças não salvas. Deseja realmente sair?';
+            return e.returnValue;
+        }
+    });
+}
+
+// Salvar tudo antes de trocar de tab
+function setupTabSwitchProtection() {
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    tabButtons.forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            if (saveQueue.size > 0) {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                console.log('💾 Salvando mudanças antes de trocar de tab...');
+                await processSaveQueue();
+                
+                // Agora pode trocar
+                btn.click();
+            }
+        }, true); // useCapture = true para interceptar antes
+    });
+}
+
+// Indicador visual de mudanças pendentes
+function updatePendingChangesIndicator() {
+    const badge = document.getElementById('badge-encomendas');
+    if (badge) {
+        if (saveQueue.size > 0) {
+            badge.textContent = saveQueue.size;
+            badge.style.display = 'inline-block';
+            badge.style.background = '#FF9500'; // Laranja (pendente)
+        } else {
+            badge.style.display = 'none';
+        }
     }
 }
 
@@ -2742,7 +2872,56 @@ async function addNewRow() {
 }
 
 // INIT
-console.log('🚀 APP.JS CARREGADO - VERSÃO 2.22.6 - FIX: LIMPEZA COMPLETA DO PRESENCE NO LOGOUT - ' + new Date().toLocaleTimeString());
+// ===================================================================
+// FULLSCREEN (Ecrã Inteiro) para Mapa de Encomendas
+// ===================================================================
+function toggleFullscreen() {
+    const container = document.querySelector('.excel-grid-container');
+    const btn = document.getElementById('fullscreen-btn');
+    
+    if (!document.fullscreenElement) {
+        // Entrar em fullscreen
+        if (container.requestFullscreen) {
+            container.requestFullscreen();
+        } else if (container.webkitRequestFullscreen) { // Safari
+            container.webkitRequestFullscreen();
+        } else if (container.msRequestFullscreen) { // IE11
+            container.msRequestFullscreen();
+        }
+        
+        btn.textContent = '⛶ Sair do Ecrã Inteiro';
+        showToast('📺 Modo ecrã inteiro ativado (ESC para sair)', 'info');
+        
+        // Adicionar classe para ajustar estilos em fullscreen
+        container.classList.add('fullscreen-active');
+    } else {
+        // Sair de fullscreen
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+        }
+        
+        btn.textContent = '⛶ Ecrã Inteiro';
+        container.classList.remove('fullscreen-active');
+    }
+}
+
+// Detectar mudanças de fullscreen (ESC, F11, etc.)
+document.addEventListener('fullscreenchange', () => {
+    const container = document.querySelector('.excel-grid-container');
+    const btn = document.getElementById('fullscreen-btn');
+    
+    if (!document.fullscreenElement) {
+        // Saiu de fullscreen
+        if (btn) btn.textContent = '⛶ Ecrã Inteiro';
+        if (container) container.classList.remove('fullscreen-active');
+    }
+});
+
+console.log('🚀 APP.JS CARREGADO - VERSÃO 2.23.3 - PROTEÇÕES USO PROLONGADO + FULLSCREEN - ' + new Date().toLocaleTimeString());
 
 // 🛠️ FUNÇÕES DE DEBUG (chamar do console)
 window.debugSecagens = function() {
