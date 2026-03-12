@@ -1,5 +1,9 @@
-// PSY - Gestão de secagens, encomendas e cargas - JavaScript Completo
-// Configuração e Estado Global já está no HTML
+// ===================================================================
+// PSY - Gestão de secagens, encomendas e cargas
+// Versão: v2.51.6 - BUGFIX: Duplicação em hot-reload (developer)
+// Data: 09/03/2026
+// ===================================================================
+console.log('🚀 APP.JS v2.51.21 - BUGFIX CRÍTICO: Mês e ano detectados AUTOMATICAMENTE (não fica preso em Março 2026)');
 
 // ===================================================================
 // SISTEMA DE SAVE COM DEBOUNCING E QUEUE (Fase 1 - Trabalho Concorrente)
@@ -122,19 +126,21 @@ function detectConflicts(estufaId, startTime, endTime, excludeId = null) {
 function getSecagemCode(sec) {
     if (!sec || !sec.estufa_id) return 'SEC_???';
     
-    // Filtrar secagens da mesma estufa que são mais antigas
+    // 🎯 v2.50.3: Usar código da BD se existir (novo comportamento)
+    if (sec.codigo) {
+        return sec.codigo;
+    }
+    
+    // ⚠️ FALLBACK: Calcular dinamicamente (para secagens antigas sem código)
     const samEstufaSecagens = secagens
         .filter(s => s.estufa_id === sec.estufa_id)
         .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     
-    // Encontrar o índice desta secagem (baseado em created_at)
     const index = samEstufaSecagens.findIndex(s => s.id === sec.id);
     const sequentialNumber = (index + 1).toString().padStart(3, '0');
-    
     const code = `SEC_E${sec.estufa_id}_${sequentialNumber}`;
     
-    // Debug
-    console.log(`🏷️ Código gerado: ${code} | ID: ${sec.id.slice(0,8)} | Created: ${new Date(sec.created_at).toLocaleString()}`);
+    console.log(`⚠️ Código gerado dinamicamente (secagem antiga): ${code} | ID: ${sec.id.slice(0,8)}`);
     
     return code;
 }
@@ -144,6 +150,46 @@ async function checkAuthState() {
     const { data: { session } } = await db.auth.getSession();
     if (session) {
         currentUser = session.user;
+        
+        // ✅ Garantir que o utilizador existe na tabela profiles
+        console.log('🔍 [checkAuthState] Verificando perfil para:', currentUser.id);
+        const { data: profile, error: profileError } = await db
+            .from('profiles')
+            .select('id')
+            .eq('id', currentUser.id)
+            .single();
+        
+        console.log('   [checkAuthState] Resultado:', { profile, profileError });
+        
+        if (profileError) {
+            if (profileError.code === 'PGRST116') {
+                // Utilizador não existe na tabela profiles → criar
+                console.log('⚠️ [checkAuthState] Perfil não encontrado, criando automaticamente...');
+                const { data: newProfile, error: insertError } = await db
+                    .from('profiles')
+                    .insert({
+                        id: currentUser.id,
+                        email: currentUser.email,
+                        nome: currentUser.email.split('@')[0],
+                        role: 'operador'
+                    })
+                    .select()
+                    .single();
+                
+                if (insertError) {
+                    console.error('❌ [checkAuthState] Erro ao criar perfil:', insertError);
+                    console.error('   Código:', insertError.code);
+                    console.error('   Detalhes:', insertError.details);
+                } else {
+                    console.log('✅ [checkAuthState] Perfil criado com sucesso!', newProfile);
+                }
+            } else {
+                console.error('❌ [checkAuthState] Erro desconhecido:', profileError);
+            }
+        } else {
+            console.log('✅ [checkAuthState] Perfil já existe:', profile);
+        }
+        
         showApp();
         loadAllData();
         setupRealtime();
@@ -155,12 +201,14 @@ async function checkAuthState() {
 }
 
 function showLogin() {
-    document.getElementById('login-screen').style.display = 'flex';
+    // 🔥 v2.51.5: Usar classe em vez de style inline
+    document.getElementById('login-screen').classList.add('show');
     document.getElementById('app').style.display = 'none';
 }
 
 function showApp() {
-    document.getElementById('login-screen').style.display = 'none';
+    // 🔥 v2.51.5: Usar classe em vez de style inline
+    document.getElementById('login-screen').classList.remove('show');
     document.getElementById('app').style.display = 'block';
     const initials = currentUser.email.substring(0, 2).toUpperCase();
     document.getElementById('user-avatar').textContent = initials;
@@ -189,6 +237,56 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         const { data, error } = await db.auth.signInWithPassword({ email, password });
         if (error) throw error;
         currentUser = data.user;
+        
+        // ✅ Garantir que o utilizador existe na tabela profiles
+        console.log('🔍 Verificando perfil para:', currentUser.id);
+        const { data: profile, error: profileError } = await db
+            .from('profiles')
+            .select('id')
+            .eq('id', currentUser.id)
+            .single();
+        
+        console.log('   Resultado da consulta:', { profile, profileError });
+        
+        if (profileError) {
+            if (profileError.code === 'PGRST116') {
+                // Utilizador não existe na tabela profiles → criar
+                console.log('⚠️ Perfil não encontrado, criando automaticamente...');
+                const { data: newProfile, error: insertError } = await db
+                    .from('profiles')
+                    .insert({
+                        id: currentUser.id,
+                        email: currentUser.email,
+                        nome: username,
+                        role: 'operador'
+                    })
+                    .select()
+                    .single();
+                
+                if (insertError) {
+                    console.error('❌ Erro ao criar perfil:', insertError);
+                    console.error('   Código:', insertError.code);
+                    console.error('   Detalhes:', insertError.details);
+                    console.error('   Hint:', insertError.hint);
+                    
+                    if (insertError.code === '42501') {
+                        console.error('⚠️ RLS está a bloquear criação de perfil!');
+                        console.error('⚠️ Você precisa criar o perfil manualmente no Supabase ou ajustar políticas RLS.');
+                        showToast('⚠️ Perfil não existe. Contacte o administrador.', 'error');
+                        // NÃO bloquear login - deixar continuar
+                    } else {
+                        throw new Error('Não foi possível criar perfil do utilizador');
+                    }
+                } else {
+                    console.log('✅ Perfil criado com sucesso!', newProfile);
+                }
+            } else {
+                console.error('❌ Erro desconhecido ao consultar perfil:', profileError);
+            }
+        } else {
+            console.log('✅ Perfil já existe:', profile);
+        }
+        
         showApp();
         loadAllData();
         setupRealtime();
@@ -273,6 +371,80 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
                 setupPresence();
             });
         }
+        
+        if (tabName === 'calendario') {
+            console.log('📅 Aba Mapa Cargas aberta - carregando dados...');
+            
+            // 🔥 BUGFIX v2.51.10: Garantir que dados estão carregados ANTES de renderizar
+            const renderizarMapaCargas = () => {
+                // 🔍 AUTO-DEBUG: Mostrar informações automáticas
+                console.log('='.repeat(60));
+                console.log('🔍 AUTO-DEBUG: DADOS DO MAPA CARGAS');
+                console.log('='.repeat(60));
+                
+                console.log('\n📊 Estado atual:');
+                console.log(`   currentCalendarioWeek: ${currentCalendarioWeek || 'não definida'}`);
+                console.log(`   currentMonth: ${currentMonth}`);
+                console.log(`   currentYear: ${currentYear}`);
+                
+                console.log('\n📅 encomendasData.dates (primeiras 20 não vazias):');
+                let count = 0;
+                encomendasData.dates.forEach((date, i) => {
+                    if (date && date.trim() !== '' && count < 20) {
+                        console.log(`   [${i}]: "${date}"`);
+                        count++;
+                    }
+                });
+                
+                console.log('\n🔍 Procurar campos TRANSP preenchidos:');
+                const transpKeys = Object.keys(encomendasData.data).filter(k => k.includes('_transp') && encomendasData.data[k] && encomendasData.data[k].trim() !== '');
+                console.log(`   ✅ Total de campos TRANSP preenchidos: ${transpKeys.length}`);
+                
+                if (transpKeys.length > 0) {
+                    console.log('\n📦 Detalhes de cada carga:');
+                    transpKeys.forEach(key => {
+                        const index = parseInt(key.split('_')[0]);
+                        const date = encomendasData.dates[index];
+                        const semana = encomendasData.data[`${index}_sem`];
+                        const cliente = encomendasData.data[`${index}_cliente`] || '(sem cliente)';
+                        const local = encomendasData.data[`${index}_local`] || '(sem local)';
+                        const medida = encomendasData.data[`${index}_medida`] || '(sem medida)';
+                        const qtd = encomendasData.data[`${index}_qtd`] || '(sem qtd)';
+                        const transp = encomendasData.data[key];
+                        const horario = encomendasData.data[`${index}_horario_carga`] || '(vazio)';
+                        
+                        console.log(`\n   📌 Índice ${index}:`);
+                        console.log(`      Data: "${date}" (formato: ${date ? date.length : 0} caracteres)`);
+                        console.log(`      Semana: ${semana}`);
+                        console.log(`      Cliente: "${cliente}"`);
+                        console.log(`      Local: "${local}"`);
+                        console.log(`      Medida: "${medida}"`);
+                        console.log(`      Qtd: "${qtd}"`);
+                        console.log(`      Transporte: "${transp}"`);
+                        console.log(`      Horário: "${horario}"`);
+                    });
+                } else {
+                    console.warn('\n   ⚠️ NENHUM campo TRANSP preenchido encontrado!');
+                    console.warn('   → Certifica-te que preencheste o campo TRANSP no Mapa de Encomendas');
+                }
+                
+                console.log('\n' + '='.repeat(60));
+                
+                renderCalendarioSemanal();
+            };
+            
+            // Verificar se dados já estão carregados
+            if (!encomendasData.dates || encomendasData.dates.length === 0) {
+                console.log('⏳ Dados não carregados ainda - carregando agora...');
+                loadEncomendasData().then(() => {
+                    console.log('✅ Dados carregados com sucesso!');
+                    renderizarMapaCargas();
+                });
+            } else {
+                console.log('✅ Dados já carregados - renderizando imediatamente...');
+                renderizarMapaCargas();
+            }
+        }
     });
 });
 
@@ -295,7 +467,7 @@ async function loadSecagens() {
         
         console.log(`✅ Carregadas ${secagens.length} secagens da BD:`);
         secagens.forEach(s => {
-            console.log(`   - ${s.id.slice(0,8)}: Estufa ${s.estufa_id} | ${s.cliente} | ${formatDateTime(s.start_time)} → ${formatDateTime(s.end_time)}`);
+            console.log(`   - ${s.id.slice(0,8)}: Estufa ${s.estufa_id} | ${formatDateTime(s.start_time)} → ${formatDateTime(s.end_time)}`);
         });
     } catch (error) {
         console.error('Error:', error);
@@ -441,13 +613,13 @@ function renderGantt() {
                     block.title = `⚠️ CONFLITO: sobrepõe-se a ${conflicts.map(c => getSecagemCode(c)).join(', ')}`;
                 }
                 
-                const cliente = sec.cargo?.[0]?.cliente || '';
                 const cargoCount = sec.cargo?.length || 0;
+                const cargoPreview = sec.cargo?.[0]?.tipo_palete || '';
                 
                 block.innerHTML = `
                     <div class="secagem-id">${getSecagemCode(sec)}</div>
                     <div class="secagem-time">${formatTime(sec.start_time)} → ${formatTime(sec.end_time)}</div>
-                    <div class="secagem-cliente">${cliente}</div>
+                    <div class="secagem-cliente">${cargoPreview}</div>
                     <div class="secagem-badges">
                         ${sec.super_dry ? '<span class="secagem-badge">SD</span>' : ''}
                         ${cargoCount > 1 ? `<span class="secagem-badge">+${cargoCount - 1}</span>` : ''}
@@ -625,16 +797,21 @@ function updateModalSidebar(estufaId) {
     document.getElementById('modal-sidebar').style.background = ESTUFA_COLORS[estufaId - 1];
 }
 
-// ✅ SISTEMA DE MATRIZ DE CARGA COM SELEÇÃO MÚLTIPLA
+// ✅ SISTEMA DE MATRIZ DE CARGA COM SELEÇÃO MÚLTIPLA E MERGE VISUAL
 let selectedCells = [];
-let matrixData = {}; // {cellId: {tipo, cliente, lotes}}
+let matrixData = {}; // {cellId: {tipo, mergedCells: [], isGroup: bool}}
+let mergedGroups = []; // [{cells: [], tipo: string}]
 
 function initMatrixSystem() {
+    console.log('🔧 INIT MATRIX SYSTEM!');
     const cells = document.querySelectorAll('.matrix-cell');
+    console.log('   Células encontradas:', cells.length);
+    const footer = document.getElementById('cargo-footer');
     
     cells.forEach(cell => {
         cell.addEventListener('click', (e) => {
             const cellId = cell.getAttribute('data-cell');
+            console.log('🖱️ CÉLULA CLICADA:', cellId, 'Ctrl:', e.ctrlKey);
             
             // Multi-seleção com Ctrl/Cmd
             if (e.ctrlKey || e.metaKey) {
@@ -655,26 +832,65 @@ function initMatrixSystem() {
             updateSelectionLabel();
         });
     });
+    
+    // Footer click handler
+    if (footer) {
+        footer.addEventListener('click', () => {
+            cells.forEach(c => c.classList.remove('selected'));
+            selectedCells = ['footer'];
+            footer.classList.add('selected');
+            updateSelectionLabel();
+        });
+    }
 }
 
 function updateSelectionLabel() {
     const label = document.getElementById('selected-cells-label');
     if (selectedCells.length === 0) {
-        label.textContent = 'Selecione células (Ctrl+clique para múltiplas)';
+        label.textContent = 'Selecione células (Ctrl+clique para múltipla seleção)';
         label.style.color = '#86868B';
+    } else if (selectedCells.includes('footer')) {
+        label.textContent = 'Linha footer selecionada';
+        label.style.color = '#007AFF';
     } else {
-        label.textContent = `${selectedCells.length} célula(s) selecionada(s)`;
+        label.textContent = `${selectedCells.length} célula(s) selecionada(s) - Serão mescladas visualmente`;
         label.style.color = '#007AFF';
     }
 }
 
+// 🎯 v2.50.0: Palette de cores progressivas (verde → azul → turquesa)
+const COLOR_PALETTE = [
+    '#4CD964', // Verde claro
+    '#5AC8FA', // Azul céu
+    '#50E3C2', // Turquesa
+    '#34C759', // Verde médio
+    '#30B0C7', // Azul médio
+    '#48D1CC', // Turquesa médio
+    '#2ECC71', // Verde esmeralda
+    '#3498DB', // Azul dodger
+    '#1ABC9C', // Verde azulado
+    '#27AE60', // Verde mais escuro
+    '#2980B9', // Azul mais escuro
+    '#16A085'  // Verde petróleo
+];
+
+let blockColorIndex = 0; // Índice global de cores
+
+// 🎯 v2.50.0: Obter próxima cor da palette
+function getNextBlockColor() {
+    const color = COLOR_PALETTE[blockColorIndex % COLOR_PALETTE.length];
+    blockColorIndex++;
+    return color;
+}
+
 function fillSelectedCells() {
+    console.log('🔵 fillSelectedCells CHAMADO!');
     const tipo = document.getElementById('cargo-tipo').value.trim();
-    const cliente = document.getElementById('cargo-cliente').value.trim();
-    const lotes = document.getElementById('cargo-lotes').value.trim();
+    console.log('   Tipo:', tipo);
+    console.log('   SelectedCells:', selectedCells);
     
-    if (!tipo || !cliente || !lotes) {
-        showToast('Preencha todos os campos', 'error');
+    if (!tipo) {
+        showToast('Preencha o campo Tipo Palete', 'error');
         return;
     }
     
@@ -683,33 +899,238 @@ function fillSelectedCells() {
         return;
     }
     
-    const cellsFilled = selectedCells.length;
+    // Footer handling
+    if (selectedCells.includes('footer')) {
+        const footer = document.getElementById('cargo-footer');
+        footer.classList.remove('selected');
+        footer.classList.add('filled');
+        footer.textContent = tipo;
+        matrixData['footer'] = { tipo, isFooter: true };
+        selectedCells = [];
+        updateSelectionLabel();
+        document.getElementById('cargo-tipo').value = '';
+        showToast('Footer preenchido', 'success');
+        return;
+    }
+    
+    // 🎯 v2.50.0: CÉLULAS INDEPENDENTES COM COR ÚNICA POR BLOCO
+    const blockColor = getNextBlockColor();
+    const blockId = `block-${Date.now()}`; // ID único do bloco
+    
+    console.log(`🟢 Preenchendo ${selectedCells.length} células | Cor: ${blockColor} | Texto: "${tipo}"`);
     
     selectedCells.forEach(cellId => {
-        matrixData[cellId] = { tipo, cliente, lotes };
+        const cell = document.querySelector(`[data-cell="${cellId}"]`);
+        if (cell) {
+            cell.classList.remove('selected');
+            cell.classList.add('filled');
+            
+            // Aplicar cor de fundo do bloco
+            cell.style.backgroundColor = blockColor;
+            
+            // Adicionar texto
+            cell.innerHTML = `<div class="cell-tipo">${tipo}</div>`;
+            
+            // Armazenar dados com informações do bloco
+            matrixData[cellId] = { 
+                tipo,
+                blockId,      // ID do bloco (para agrupar células)
+                blockColor,   // Cor do bloco
+                blockCells: [...selectedCells] // Todas as células do bloco
+            };
+            
+            console.log(`   ✅ ${cellId}: filled com cor ${blockColor}`);
+        }
+    });
+    
+    // CÓDIGO ANTIGO DE MERGE REMOVIDO
+    if (false && selectedCells.length > 1) {
+        console.log('🟢 MESCLANDO', selectedCells.length, 'células:', selectedCells);
+        
+        // Encontrar célula principal (top-left) - SÓ ela terá texto
+        const rows = selectedCells.map(id => parseInt(id.split('-')[0]));
+        const cols = selectedCells.map(id => parseInt(id.split('-')[1]));
+        const minRow = Math.min(...rows);
+        const minCol = Math.min(...cols);
+        const mainCellId = `${minRow}-${minCol}`;
+        
+        console.log(`   📌 Célula principal: ${mainCellId} (única com texto)`);
+        
+        // ✅ TODAS as células ficam verdes individualmente (SEM bounding box!)
+        selectedCells.forEach(cellId => {
+            const cell = document.querySelector(`[data-cell="${cellId}"]`);
+            if (cell) {
+                cell.classList.remove('selected');
+                cell.classList.add('filled', 'merged-cell');
+                
+                // 🎯 FIX v2.30.8: border-radius: 0 ANTES das margens negativas
+                cell.style.setProperty('border-radius', '0', 'important');
+                
+                // 🎯 FIX v2.30.10: position + z-index (SEM overflow:hidden global!)
+                cell.style.setProperty('position', 'relative', 'important');
+                cell.style.setProperty('z-index', '2', 'important'); // Acima das células cinzas (z-index: 1)
+                
+                // APENAS a célula principal tem texto
+                if (cellId === mainCellId) {
+                    // 🎯 FIX v2.30.11: Centralizar texto no bloco mesclado inteiro
+                    const rowSpan = Math.max(...rows) - Math.min(...rows) + 1;
+                    const colSpan = Math.max(...cols) - Math.min(...cols) + 1;
+                    
+                    // Criar container de texto que cobre todo o bloco
+                    cell.innerHTML = `<div class="cell-tipo merged-text" style="
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        width: calc(${colSpan} * 100% + ${colSpan - 1} * 8px);
+                        height: calc(${rowSpan} * 100% + ${rowSpan - 1} * 8px);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        pointer-events: none;
+                        z-index: 100;
+                        color: white;
+                        font-weight: 700;
+                    ">${tipo}</div>`;
+                    console.log(`   ✅ ${cellId}: filled + merged-cell (COM TEXTO CENTRALIZADO ${rowSpan}×${colSpan})`);
+                } else {
+                    cell.innerHTML = ''; // Outras células: verdes mas vazias
+                    console.log(`   ✅ ${cellId}: filled + merged-cell (sem texto)`);
+                }
+                
+                // Armazenar dados
+                matrixData[cellId] = {
+                    tipo,
+                    isGroupMember: true,
+                    mainCell: mainCellId,
+                    groupCells: [...selectedCells]
+                };
+                
+                // Remover bordas internas entre células adjacentes do grupo
+                const [row, col] = cellId.split('-').map(n => parseInt(n));
+                
+                // Vizinhos
+                const rightNeighbor = `${row}-${col+1}`;
+                const leftNeighbor = `${row}-${col-1}`;
+                const bottomNeighbor = `${row+1}-${col}`;
+                const topNeighbor = `${row-1}-${col}`;
+                
+                // 🎯 FIX v2.30.19: Margin negativa APENAS nas bordas INTERNAS do bloco
+                // Bordas EXTERNAS mantêm margin 0 (não empurram vizinhos)
+                
+                // Direita: verificar se é borda INTERNA (vizinho no mesmo grupo)
+                if (selectedCells.includes(rightNeighbor)) {
+                    // Borda INTERNA: remover borda + aplicar margin negativa
+                    cell.style.setProperty('border-right', 'none', 'important');
+                    cell.style.setProperty('margin-right', '-10px', 'important');
+                    console.log(`      🔹 ${cellId}: border-right + margin-right=-10px (INTERNA: ${rightNeighbor})`);
+                } else {
+                    // Borda EXTERNA: manter borda verde + margin 0
+                    cell.style.setProperty('border-right', '2px solid #2DA948', 'important');
+                    cell.style.setProperty('margin-right', '0', 'important');
+                }
+                
+                // Esquerda: verificar se vizinho está no grupo
+                const leftNeighborInGroup = selectedCells.includes(leftNeighbor);
+                if (leftNeighborInGroup) {
+                    // Borda INTERNA: remover borda (margin já aplicada pelo vizinho à esquerda)
+                    cell.style.setProperty('border-left', 'none', 'important');
+                    cell.style.setProperty('margin-left', '0', 'important');
+                    console.log(`      🔹 ${cellId}: border-left removida (INTERNA: ${leftNeighbor})`);
+                } else {
+                    // Borda EXTERNA: manter borda verde + margin 0
+                    cell.style.setProperty('border-left', '2px solid #2DA948', 'important');
+                    cell.style.setProperty('margin-left', '0', 'important');
+                }
+                
+                // Baixo: verificar se é borda INTERNA
+                if (selectedCells.includes(bottomNeighbor)) {
+                    // Borda INTERNA: remover borda + aplicar margin negativa
+                    cell.style.setProperty('border-bottom', 'none', 'important');
+                    cell.style.setProperty('margin-bottom', '-10px', 'important');
+                    console.log(`      🔹 ${cellId}: border-bottom + margin-bottom=-10px (INTERNA: ${bottomNeighbor})`);
+                } else {
+                    // Borda EXTERNA: manter borda verde + margin 0
+                    cell.style.setProperty('border-bottom', '2px solid #2DA948', 'important');
+                    cell.style.setProperty('margin-bottom', '0', 'important');
+                }
+                
+                // Cima: verificar se vizinho está no grupo
+                const topNeighborInGroup = selectedCells.includes(topNeighbor);
+                if (topNeighborInGroup) {
+                    // Borda INTERNA: remover borda (margin já aplicada pelo vizinho acima)
+                    cell.style.setProperty('border-top', 'none', 'important');
+                    cell.style.setProperty('margin-top', '0', 'important');
+                    console.log(`      🔹 ${cellId}: border-top removida (INTERNA: ${topNeighbor})`);
+                } else {
+                    // Borda EXTERNA: manter borda verde + margin 0
+                    cell.style.setProperty('border-top', '2px solid #2DA948', 'important');
+                    cell.style.setProperty('margin-top', '0', 'important');
+                }
+            }
+        });
+        
+        mergedGroups.push({ cells: [...selectedCells], tipo, mainCell: mainCellId });
+        console.log('✅ Mesclagem concluída! Células verdes individualmente, bordas internas removidas.');
+    } else {
+        // Célula única
+        const cellId = selectedCells[0];
+        matrixData[cellId] = { tipo };
         
         const cell = document.querySelector(`[data-cell="${cellId}"]`);
         cell.classList.remove('selected');
         cell.classList.add('filled');
-        cell.innerHTML = `
-            <div class="cell-tipo">${tipo}</div>
-            <div class="cell-cliente">${cliente}</div>
-            <div class="cell-lotes">${lotes} lotes</div>
-        `;
-    });
+        cell.innerHTML = `<div class="cell-tipo">${tipo}</div>`;
+    }
     
     selectedCells = [];
     updateSelectionLabel();
     
-    // Limpar inputs
+    // Limpar input
     document.getElementById('cargo-tipo').value = '';
-    document.getElementById('cargo-cliente').value = '';
-    document.getElementById('cargo-lotes').value = '';
     
     console.log('✅ MatrixData atualizado:', matrixData);
+    console.log('✅ Merged groups:', mergedGroups);
     console.log(`   Total de células preenchidas: ${Object.keys(matrixData).length}`);
     
-    showToast(`${cellsFilled} célula(s) preenchida(s)`, 'success');
+    showToast(`${cellsFilled} célula(s) preenchida(s) ${cellsFilled > 1 ? '(mescladas)' : ''}`, 'success');
+}
+
+function createMergeOverlay(mainCellId, minRow, maxRow, minCol, maxCol, tipo, cells) {
+    // Remover overlay anterior se existir
+    const existingOverlay = document.getElementById(`overlay-${mainCellId}`);
+    if (existingOverlay) {
+        existingOverlay.remove();
+    }
+    
+    // Pegar célula top-left para referência de posição
+    const topLeftCell = document.querySelector(`[data-cell="${minRow}-${minCol}"]`);
+    if (!topLeftCell) return;
+    
+    // Criar overlay
+    const overlay = document.createElement('div');
+    overlay.id = `overlay-${mainCellId}`;
+    overlay.className = 'merge-overlay';
+    overlay.dataset.cells = JSON.stringify(cells);
+    
+    // Calcular dimensões do bounding box
+    const rowSpan = maxRow - minRow + 1;
+    const colSpan = maxCol - minCol + 1;
+    
+    // Aplicar CSS variables para posicionamento
+    overlay.style.setProperty('--row-start', minRow);
+    overlay.style.setProperty('--col-start', minCol);
+    overlay.style.setProperty('--row-span', rowSpan);
+    overlay.style.setProperty('--col-span', colSpan);
+    
+    // Adicionar texto centralizado
+    overlay.innerHTML = `<div class="overlay-tipo">${tipo}</div>`;
+    
+    // Adicionar ao grid
+    const matrixGrid = document.getElementById('cargo-matrix-grid');
+    if (matrixGrid) {
+        matrixGrid.appendChild(overlay);
+        console.log(`   🎨 Overlay criado: ${rowSpan}×${colSpan} sobre células ${cells.join(', ')}`);
+    }
 }
 
 function clearSelectedCells() {
@@ -718,12 +1139,55 @@ function clearSelectedCells() {
         return;
     }
     
+    // Footer handling
+    if (selectedCells.includes('footer')) {
+        const footer = document.getElementById('cargo-footer');
+        footer.classList.remove('selected', 'filled');
+        footer.textContent = '';
+        delete matrixData['footer'];
+        selectedCells = [];
+        updateSelectionLabel();
+        showToast('Footer limpo', 'success');
+        return;
+    }
+    
     selectedCells.forEach(cellId => {
-        delete matrixData[cellId];
+        const cellData = matrixData[cellId];
         
-        const cell = document.querySelector(`[data-cell="${cellId}"]`);
-        cell.classList.remove('selected', 'filled');
-        cell.innerHTML = '';
+        // Se é membro de um grupo, limpar TODAS as células do grupo
+        if (cellData && cellData.isGroupMember) {
+            const groupCells = cellData.groupCells;
+            groupCells.forEach(id => {
+                delete matrixData[id];
+                const cell = document.querySelector(`[data-cell="${id}"]`);
+                if (cell) {
+                    cell.classList.remove('selected', 'filled', 'merged-cell');
+                    // Remover todas as propriedades de borda, radius E margins aplicadas
+                    cell.style.removeProperty('border-right');
+                    cell.style.removeProperty('border-left');
+                    cell.style.removeProperty('border-top');
+                    cell.style.removeProperty('border-bottom');
+                    cell.style.removeProperty('border-top-left-radius');
+                    cell.style.removeProperty('border-top-right-radius');
+                    cell.style.removeProperty('border-bottom-left-radius');
+                    cell.style.removeProperty('border-bottom-right-radius');
+                    cell.style.removeProperty('margin-right');
+                    cell.style.removeProperty('margin-left');
+                    cell.style.removeProperty('margin-top');
+                    cell.style.removeProperty('margin-bottom');
+                    cell.innerHTML = '';
+                }
+            });
+            mergedGroups = mergedGroups.filter(g => !g.cells.includes(cellId));
+        } else {
+            // Célula individual
+            delete matrixData[cellId];
+            const cell = document.querySelector(`[data-cell="${cellId}"]`);
+            if (cell) {
+                cell.classList.remove('selected', 'filled');
+                cell.innerHTML = '';
+            }
+        }
     });
     
     selectedCells = [];
@@ -732,49 +1196,125 @@ function clearSelectedCells() {
 }
 
 function loadMatrixData(cargoArray) {
-    // Limpar matriz
+    // 🎯 v2.50.0: Limpar matriz e resetar índice de cores
     matrixData = {};
+    mergedGroups = [];
+    blockColorIndex = 0; // Reset para cores consistentes
+    
     document.querySelectorAll('.matrix-cell').forEach(cell => {
         cell.classList.remove('filled', 'selected');
+        cell.style.backgroundColor = ''; // Limpar cores
+        cell.style.gridColumn = '';
+        cell.style.gridRow = '';
+        cell.style.aspectRatio = '';
+        cell.style.zIndex = '';
         cell.innerHTML = '';
     });
+    
+    const footer = document.getElementById('cargo-footer');
+    if (footer) {
+        footer.classList.remove('filled', 'selected');
+        footer.textContent = '';
+    }
     
     // Carregar dados
     if (cargoArray && cargoArray.length > 0) {
         cargoArray.forEach(item => {
-            if (item.posicao) {
-                const cellId = item.posicao;
-                matrixData[cellId] = {
-                    tipo: item.tipo_palete,
-                    cliente: item.cliente,
-                    lotes: item.quantidade
-                };
-                
+            if (!item.posicao) return;
+            
+            const posicao = item.posicao;
+            const tipo = item.tipo_palete;
+            const blockColor = getNextBlockColor(); // 🎯 Gerar cor automaticamente (block_color não existe na BD)
+            
+            // Footer handling
+            if (posicao === 'footer') {
+                if (footer) {
+                    footer.classList.add('filled');
+                    footer.textContent = tipo;
+                    matrixData['footer'] = { tipo, isFooter: true };
+                }
+                return;
+            }
+            
+            // 🎯 v2.50.0: Carregar bloco com células concatenadas
+            const cellIds = posicao.split(',');
+            const blockId = `block-${Date.now()}-${Math.random()}`;
+            
+            cellIds.forEach(cellId => {
                 const cell = document.querySelector(`[data-cell="${cellId}"]`);
                 if (cell) {
                     cell.classList.add('filled');
-                    cell.innerHTML = `
-                        <div class="cell-tipo">${item.tipo_palete}</div>
-                        <div class="cell-cliente">${item.cliente}</div>
-                        <div class="cell-lotes">${item.quantidade} lotes</div>
-                    `;
+                    cell.style.backgroundColor = blockColor; // Aplicar cor
+                    cell.innerHTML = `<div class="cell-tipo">${tipo}</div>`;
+                    
+                    matrixData[cellId] = {
+                        tipo,
+                        blockId,
+                        blockColor,
+                        blockCells: cellIds
+                    };
                 }
-            }
+            });
+            
+            console.log(`   📥 Carregado bloco (${cellIds.length} células) → cor ${blockColor}`);
         });
     }
-    
-    selectedCells = [];
-    updateSelectionLabel();
 }
 
 function getMatrixCargoData() {
-    // Converter matrixData em array para salvar
-    return Object.entries(matrixData).map(([cellId, data]) => ({
-        posicao: cellId,
-        tipo_palete: data.tipo,
-        cliente: data.cliente,
-        quantidade: parseInt(data.lotes)
-    }));
+    // 🎯 v2.50.1: Agrupar células por bloco SEM duplicação
+    const result = [];
+    const processedBlocks = new Set();
+    const processedCells = new Set(); // 🆕 Evitar duplicação de células
+    
+    Object.entries(matrixData).forEach(([cellId, data]) => {
+        // Validar dados
+        if (!data || !data.tipo) return;
+        
+        // Footer: tratamento especial
+        if (cellId === 'footer' || data.isFooter) {
+            if (!processedCells.has('footer')) {
+                result.push({
+                    posicao: 'footer',
+                    tipo_palete: data.tipo
+                });
+                processedCells.add('footer');
+                console.log(`   💾 BD: footer → "${data.tipo}"`);
+            }
+            return;
+        }
+        
+        // 🆕 VALIDAÇÃO: Ignorar células já processadas
+        if (processedCells.has(cellId)) {
+            console.log(`   ⏭️ Célula ${cellId} já processada, ignorando duplicação`);
+            return;
+        }
+        
+        // Ignorar blocos já processados
+        if (data.blockId && processedBlocks.has(data.blockId)) return;
+        
+        // Marcar bloco como processado
+        if (data.blockId) {
+            processedBlocks.add(data.blockId);
+        }
+        
+        // Determinar células do bloco
+        const blockCells = (data.blockCells && Array.isArray(data.blockCells)) 
+            ? data.blockCells 
+            : [cellId]; // Array de 1 elemento
+        
+        // 🆕 Marcar TODAS as células do bloco como processadas
+        blockCells.forEach(id => processedCells.add(id));
+        
+        result.push({
+            posicao: blockCells.join(','), // Ex: "7-1,7-2" ou "8-1"
+            tipo_palete: data.tipo
+        });
+        
+        console.log(`   💾 BD: bloco ${data.blockId || 'único'} → ${blockCells.length} célula(s): ${blockCells.join(',')}`);
+    });
+    
+    return result;
 }
 
 function calculateEndTime() {
@@ -852,18 +1392,13 @@ document.getElementById('form-secagem').addEventListener('submit', async (e) => 
             console.log(`   Item ${index + 1}:`, {
                 posicao: item.posicao,
                 tipo_posicao: typeof item.posicao,
-                tipo_palete: item.tipo_palete,
-                cliente: item.cliente,
-                quantidade: item.quantidade,
-                tipo_quantidade: typeof item.quantidade
+                tipo_palete: item.tipo_palete
             });
             
-            // Validações
+            // Validações (apenas campos obrigatórios)
             if (!item.posicao) console.warn(`   ⚠️ Item ${index + 1}: posicao está vazio!`);
             if (typeof item.posicao !== 'string') console.warn(`   ⚠️ Item ${index + 1}: posicao não é string!`);
             if (!item.tipo_palete) console.warn(`   ⚠️ Item ${index + 1}: tipo_palete está vazio!`);
-            if (!item.cliente) console.warn(`   ⚠️ Item ${index + 1}: cliente está vazio!`);
-            if (!item.quantidade || isNaN(item.quantidade)) console.warn(`   ⚠️ Item ${index + 1}: quantidade inválida!`);
         });
     }
     
@@ -880,29 +1415,71 @@ document.getElementById('form-secagem').addEventListener('submit', async (e) => 
             
             if (error) throw error;
             
+            // 🔒 SEGURANÇA: Apagar e reinserir cargo em transação segura
+            // 1. Backup do cargo antigo em memória (para rollback se necessário)
+            const { data: oldCargo } = await db.from('secagem_cargo')
+                .select('*')
+                .eq('secagem_id', secagemId);
+            console.log('📦 BACKUP cargo antigo:', oldCargo);
+            
+            // 2. Apagar cargo antigo
             await db.from('secagem_cargo').delete().eq('secagem_id', secagemId);
+            console.log('🗑️ Cargo antigo apagado');
+            
+            // 3. Inserir novo cargo
             if (cargoItems.length > 0) {
                 const cargoToInsert = cargoItems.map(c => ({ ...c, secagem_id: secagemId }));
                 console.log('📦 INSERINDO CARGO (UPDATE):', cargoToInsert);
                 const { data: cargoData, error: cargoError } = await db.from('secagem_cargo').insert(cargoToInsert).select();
+                
                 if (cargoError) {
                     console.error('❌ ERRO AO INSERIR CARGO:');
                     console.error('   Mensagem:', cargoError.message);
                     console.error('   Código:', cargoError.code);
                     console.error('   Detalhes:', cargoError.details);
-                    console.error('   Hint:', cargoError.hint);
-                    console.error('   Objeto completo:', JSON.stringify(cargoError, null, 2));
+                    
+                    // 🚑 ROLLBACK: Tentar restaurar cargo antigo
+                    if (oldCargo && oldCargo.length > 0) {
+                        console.log('🚑 Tentando restaurar cargo antigo...');
+                        const { error: restoreError } = await db.from('secagem_cargo').insert(oldCargo);
+                        if (restoreError) {
+                            console.error('💀 ERRO CRÍTICO: Não foi possível restaurar cargo!', restoreError);
+                        } else {
+                            console.log('✅ Cargo antigo restaurado com sucesso');
+                        }
+                    }
+                    
                     throw cargoError;
                 }
                 console.log('✅ CARGO INSERIDO:', cargoData);
+            } else {
+                console.log('⚠️ Nenhum cargo novo para inserir');
             }
             
             showToast('Secagem atualizada!');
         } else {
+            // 🎯 v2.50.3: Gerar código antes de inserir
+            // Contar secagens existentes da mesma estufa para gerar código sequencial
+            const { data: existingSecagens, error: countError } = await db
+                .from('secagens')
+                .select('id, created_at')
+                .eq('estufa_id', estufaId)
+                .order('created_at', { ascending: true });
+            
+            if (countError) {
+                console.warn('⚠️ Erro ao contar secagens:', countError);
+            }
+            
+            const sequentialNumber = ((existingSecagens?.length || 0) + 1).toString().padStart(3, '0');
+            const codigo = `SEC_E${estufaId}_${sequentialNumber}`;
+            
+            console.log(`🏷️ Código gerado para nova secagem: ${codigo}`);
+            
             const { data: newSec, error } = await db.from('secagens').insert({
+                codigo: codigo,  // 🆕 Código único e estável
                 estufa_id: estufaId,
                 start_time: startTime,
-                end_time: endDate.toISOString(),  // ← ADICIONAR end_time explicitamente
+                end_time: endDate.toISOString(),
                 duration_hours: duration,
                 obs: obs,
                 status: 'planeada',
@@ -934,6 +1511,14 @@ document.getElementById('form-secagem').addEventListener('submit', async (e) => 
         }
         
         await loadAllData();
+        renderGantt();
+        
+        // Atualizar Estufas Live se estiver na tab de visualização
+        const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+        if (activeTab === 'visualizacao') {
+            await loadDashboard();
+        }
+        
         closeModal();
     } catch (error) {
         console.error('Error:', error);
@@ -951,6 +1536,14 @@ async function deleteSecagem() {
         if (error) throw error;
         showToast('Secagem eliminada');
         await loadAllData();
+        renderGantt();
+        
+        // Atualizar Estufas Live se estiver na tab de visualização
+        const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+        if (activeTab === 'visualizacao') {
+            await loadDashboard();
+        }
+        
         closeModal();
     } catch (error) {
         showToast('Erro ao eliminar', 'error');
@@ -970,8 +1563,13 @@ function setupRealtime() {
 }
 
 // MAPA DE ENCOMENDAS - Excel Grid (DATAS nas LINHAS, CAMPOS nas COLUNAS)
-let currentMonth = 'mar';  // Mês atual selecionado
-let currentYear = 2026;
+// 🔥 v2.51.21: Detectar mês e ano ATUAL automaticamente
+const hoje = new Date();
+const mesesAbrev = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+let currentMonth = mesesAbrev[hoje.getMonth()];  // Mês atual (ex: 'mar', 'abr', etc.)
+let currentYear = hoje.getFullYear();  // Ano atual (ex: 2026)
+
+console.log(`📅 Mês/Ano detectado automaticamente: ${currentMonth}/${currentYear} (hoje: ${hoje.toLocaleDateString('pt-PT')})`);
 
 let encomendasData = {
     dates: [],  // Será carregado da BD
@@ -985,6 +1583,7 @@ let encomendasData = {
         { label: 'E.T.*', key: 'et', color: '#D9E1F2', width: '80px' },
         { label: 'ENC.', key: 'enc', color: '#FFFFFF', width: '100px' },
         { label: 'NºVIAGEM', key: 'nviagem', color: '#FFFFFF', width: '100px' },
+        { label: 'HORÁRIO', key: 'horario_carga', color: '#FFF4E6', width: '150px', type: 'select' },  // 🆕 v2.51.0
         { label: 'OBSERVAÇÕES', key: 'obs', color: '#FFFFFF', width: '200px' }
     ],
     data: {}  // {date_field: value}
@@ -1031,9 +1630,20 @@ function generateWeekTabs() {
     
     weekTabs = Array.from(weeks).sort((a, b) => a - b);
     
-    // Se não há semana ativa, selecionar a primeira
+    // 🔥 FEATURE v2.51.15: Selecionar semana ATUAL (data de hoje) ao invés da primeira
     if (!currentWeek && weekTabs.length > 0) {
-        currentWeek = weekTabs[0];
+        const today = new Date();
+        const currentWeekNumber = getWeekNumber(today);
+        
+        // Se semana atual existe nas tabs, selecionar ela
+        if (weekTabs.includes(currentWeekNumber)) {
+            currentWeek = currentWeekNumber;
+            console.log(`📅 Semana ATUAL selecionada automaticamente: Semana ${currentWeek}`);
+        } else {
+            // Fallback: semana mais próxima (primeira disponível)
+            currentWeek = weekTabs[0];
+            console.log(`⚠️ Semana atual (${currentWeekNumber}) não encontrada. Usando primeira: Semana ${currentWeek}`);
+        }
     }
     
     // Criar tabs
@@ -1413,8 +2023,8 @@ function addDaySubtotal(tbody, dateStr, rowCount, qtdSum) {
         td.style.padding = '6px';
         td.style.border = '1px solid #A0C4E8';
         
-        if (field.key === 'local') {
-            // Coluna LOCAL: mostrar contador de cargas
+        if (field.key === 'transp') {
+            // Coluna TRANSP: mostrar contador de cargas
             td.textContent = `${rowCount} cargas`;
             td.style.color = '#0066CC';
             td.style.fontWeight = '600';
@@ -1465,8 +2075,8 @@ function addWeekSubtotal(tbody, weekNum, rowCount, qtdSum) {
         td.style.padding = '8px';
         td.style.border = '1px solid #A0C4E8';
         
-        if (field.key === 'local') {
-            // Coluna LOCAL: mostrar contador de cargas
+        if (field.key === 'transp') {
+            // Coluna TRANSP: mostrar contador de cargas
             td.textContent = `${rowCount} cargas`;
             td.style.color = '#0066CC';
             td.style.fontWeight = '600';
@@ -1513,6 +2123,9 @@ function renderEncomendasGrid() {
         let datesToRender = encomendasData.dates;
         let dataToRender = encomendasData.data;
         
+        // Mapeamento index filtrado -> index original
+        let indexMapping = [];
+        
         if (currentWeek !== null) {
             console.log(`📊 Filtrando dados pela semana ${currentWeek}`);
             
@@ -1525,6 +2138,7 @@ function renderEncomendasGrid() {
                 if (weekNum === currentWeek) {
                     const newIndex = filtered.length;
                     filtered.push(date);
+                    indexMapping.push(originalIndex);  // Guardar mapeamento
                     
                     // Copiar dados desta linha
                     encomendasData.fields.forEach(field => {
@@ -1541,6 +2155,9 @@ function renderEncomendasGrid() {
             dataToRender = filteredData;
             
             console.log(`   ✅ Filtrado: ${datesToRender.length} linhas da semana ${currentWeek}`);
+        } else {
+            // Sem filtro: mapeamento 1:1
+            indexMapping = datesToRender.map((_, i) => i);
         }
         
         console.log(`📊 Renderizando grid:`, {
@@ -1670,54 +2287,123 @@ function renderEncomendasGrid() {
         dateTh.appendChild(dateSpan);
         tr.appendChild(dateTh);
         
+        // 🔥 BUGFIX v2.51.2: Obter o índice ORIGINAL antes de tudo
+        const originalIndex = indexMapping[index] || index;
+        
         // Calcular semana automaticamente para a primeira célula (SEM)
         const weekNumber = getWeekNumberFromDateStr(date);
-        const semCellKey = `${index}_sem`;  // USAR INDEX em vez de date
+        const semCellKey = `${originalIndex}_sem`;  // 🔥 Usar originalIndex!
         if (!encomendasData.data[semCellKey]) {
             encomendasData.data[semCellKey] = weekNumber.toString();
         }
         
         // Células editáveis para cada campo
         encomendasData.fields.forEach(field => {
-            const cellKey = `${index}_${field.key}`;  // USAR INDEX em vez de date
-            const value = dataToRender[cellKey] || '';
+            const cellKey = `${originalIndex}_${field.key}`;  // 🔥 Usar originalIndex!
+            const value = encomendasData.data[cellKey] || '';  // 🔥 Buscar em encomendasData.data, não dataToRender!
             
             const td = document.createElement('td');
             td.className = 'excel-cell';
-            td.contentEditable = 'true';
-            td.setAttribute('data-row-index', index);  // Adicionar index
+            td.setAttribute('data-row-index', index);  // Index filtrado (display)
+            td.setAttribute('data-original-index', originalIndex);  // Index global (save)
             td.setAttribute('data-date', date);
             td.setAttribute('data-field', field.key);
-            td.textContent = value;
             td.style.background = field.color;
             td.style.border = '1px solid #D0D0D0';
-            td.style.padding = '6px 8px';
+            td.style.padding = field.type === 'select' ? '0' : '6px 8px';
             td.style.fontSize = '11px';
             td.style.minHeight = '28px';
             td.style.minWidth = field.width || '120px';
             
-            // Auto-save on blur
-            td.addEventListener('blur', () => {
-                const oldValue = encomendasData.data[cellKey] || '';
-                const newValue = td.textContent.trim();
+            // 🆕 v2.51.0: Renderizar SELECT para horario_carga
+            if (field.type === 'select' && field.key === 'horario_carga') {
+                td.contentEditable = 'false';
+                const select = document.createElement('select');
+                select.className = 'horario-select';
+                select.style.width = '100%';
+                select.style.height = '100%';
+                select.style.border = 'none';
+                select.style.background = field.color;
+                select.style.padding = '6px 8px';
+                select.style.fontSize = '11px';
+                select.style.cursor = 'pointer';
                 
-                if (oldValue !== newValue) {
-                    encomendasData.data[cellKey] = newValue;
-                    console.log('💾 Atualizado:', cellKey, '=', newValue);
+                const options = [
+                    { value: '', label: '--' },
+                    { value: '06:00 - 08:00', label: '06:00 - 08:00' },
+                    { value: '08:00 - 10:00', label: '08:00 - 10:00' },
+                    { value: '10:00 - 12:00', label: '10:00 - 12:00' },
+                    { value: '12:00 - 14:00', label: '12:00 - 14:00' },
+                    { value: '14:00 - 16:00', label: '14:00 - 16:00' },
+                    { value: '16:00 - 18:00', label: '16:00 - 18:00' },
+                    { value: '18:00 - 20:00', label: '18:00 - 20:00' },
+                    { value: 'Manhã', label: 'Manhã' },
+                    { value: 'Tarde', label: 'Tarde' }
+                ];
+                
+                options.forEach(opt => {
+                    const option = document.createElement('option');
+                    option.value = opt.value;
+                    option.textContent = opt.label;
+                    if (opt.value === value) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+                
+                select.addEventListener('change', () => {
+                    const oldValue = encomendasData.data[cellKey] || '';
+                    const newValue = select.value;
                     
-                    // Registar no histórico
-                    logHistory('UPDATE', {
-                        date: date,
-                        field_name: field.key,
-                        old_value: oldValue,
-                        new_value: newValue,
-                        row_order: index
-                    });
+                    if (oldValue !== newValue) {
+                        encomendasData.data[cellKey] = newValue;
+                        console.log('💾 Horário atualizado:', cellKey, '=', newValue);
+                        
+                        const originalIdx = parseInt(td.getAttribute('data-original-index'));
+                        
+                        logHistory('UPDATE', {
+                            date: date,
+                            field_name: field.key,
+                            old_value: oldValue,
+                            new_value: newValue,
+                            row_order: originalIdx
+                        });
+                        
+                        queueSave(originalIdx, field.key, newValue);
+                    }
+                });
+                
+                td.appendChild(select);
+            } else {
+                // Célula editável normal
+                td.contentEditable = 'true';
+                td.textContent = value;
+                
+                // Auto-save on blur
+                td.addEventListener('blur', () => {
+                    const oldValue = encomendasData.data[cellKey] || '';
+                    const newValue = td.textContent.trim();
                     
-                    // NOVO: Adicionar à fila de saves (com debouncing)
-                    queueSave(index, field.key, newValue);
-                }
-            });
+                    if (oldValue !== newValue) {
+                        encomendasData.data[cellKey] = newValue;
+                        console.log('💾 Atualizado:', cellKey, '=', newValue);
+                        
+                        const originalIdx = parseInt(td.getAttribute('data-original-index'));
+                        
+                        // Registar no histórico
+                        logHistory('UPDATE', {
+                            date: date,
+                            field_name: field.key,
+                            old_value: oldValue,
+                            new_value: newValue,
+                            row_order: originalIdx  // Usar índice original
+                        });
+                        
+                        // NOVO: Adicionar à fila de saves (com debouncing) - USAR ÍNDICE ORIGINAL
+                        queueSave(originalIdx, field.key, newValue);
+                    }
+                });
+            }
             
             // Foco visual + tracking de presença
             td.addEventListener('focus', () => {
@@ -1871,6 +2557,13 @@ function renderEncomendasGrid() {
 async function loadEncomendasData() {
     console.log('📥 Carregando encomendas para:', currentMonth + '/' + currentYear);
     
+    // 🔥 v2.51.21: Atualizar dropdown do mês para o mês atual
+    const monthSelector = document.getElementById('month-selector');
+    if (monthSelector && monthSelector.value !== currentMonth) {
+        monthSelector.value = currentMonth;
+        console.log(`📅 Dropdown atualizado para: ${currentMonth}`);
+    }
+    
     try {
         const { data, error } = await db
             .from('mapa_encomendas')
@@ -1893,12 +2586,20 @@ async function loadEncomendasData() {
             encomendasData.dates = [];
             encomendasData.data = {};
             
-            data.forEach((row, rowIndex) => {
-                encomendasData.dates.push(row.date);
+            data.forEach((row) => {
+                // 🔥 BUGFIX v2.51.1: Usar row.row_order (índice original da BD) em vez de rowIndex (índice do array filtrado)
+                const originalIndex = row.row_order;
                 
-                // Carregar dados das células usando INDEX
+                // Expandir array se necessário (caso haja gaps nos row_order)
+                while (encomendasData.dates.length <= originalIndex) {
+                    encomendasData.dates.push('');
+                }
+                
+                encomendasData.dates[originalIndex] = row.date;
+                
+                // Carregar dados das células usando o ÍNDICE ORIGINAL
                 encomendasData.fields.forEach(field => {
-                    const cellKey = `${rowIndex}_${field.key}`;
+                    const cellKey = `${originalIndex}_${field.key}`;
                     if (row[field.key]) {
                         encomendasData.data[cellKey] = row[field.key];
                     }
@@ -2007,14 +2708,19 @@ async function processSaveQueue() {
 }
 
 // Salvar dados de UMA linha específica (UPSERT)
-async function saveRowData(rowIndex, fields) {
+async function saveRowData(originalRowIndex, fields) {
     try {
-        const date = encomendasData.dates[rowIndex];
+        // 🔥 v2.51.0: BUGFIX - rowIndex é o índice ORIGINAL (não o filtrado)
+        // Precisamos obter a data pelo índice original
+        const date = encomendasData.dates[originalRowIndex];
         
         if (!date) {
-            console.warn('⚠️ Linha', rowIndex, 'não existe');
+            console.warn('⚠️ Linha', originalRowIndex, 'não existe nos dados');
+            console.warn('   Total de dates:', encomendasData.dates.length);
             return;
         }
+        
+        console.log(`💾 Salvando linha ${originalRowIndex}: data=${date}, fields=`, fields);
         
         // 1. Verificar se linha já existe
         const { data: existing, error: selectError } = await db
@@ -2022,7 +2728,7 @@ async function saveRowData(rowIndex, fields) {
             .select('id')
             .eq('month', currentMonth)
             .eq('year', currentYear)
-            .eq('row_order', rowIndex)
+            .eq('row_order', originalRowIndex)
             .maybeSingle();
         
         if (selectError) {
@@ -2035,36 +2741,63 @@ async function saveRowData(rowIndex, fields) {
             month: currentMonth,
             year: currentYear,
             date: date,
-            row_order: rowIndex,
+            row_order: originalRowIndex,
             updated_at: new Date().toISOString(),
             ...fields
         };
         
+        // 🔥 TEMPORÁRIO v2.51.1: Remover horario_carga se causar erro 400
+        // (coluna ainda não existe na BD - precisa executar SQL)
+        if (rowData.horario_carga !== undefined) {
+            console.log('⚠️ Campo horario_carga detectado. Se houver erro 400, execute o SQL: ALTER TABLE mapa_encomendas ADD COLUMN horario_carga TEXT;');
+        }
+        
         if (existing) {
             // 2. UPDATE linha existente
-            const { error: updateError } = await db
+            let { error: updateError } = await db
                 .from('mapa_encomendas')
                 .update(rowData)
                 .eq('id', existing.id);
+            
+            // 🔥 RETRY sem horario_carga se erro 400 (coluna não existe)
+            if (updateError && updateError.code === 'PGRST204' && rowData.horario_carga !== undefined) {
+                console.warn('⚠️ Coluna horario_carga não existe. Tentando salvar sem ela...');
+                delete rowData.horario_carga;
+                const retry = await db
+                    .from('mapa_encomendas')
+                    .update(rowData)
+                    .eq('id', existing.id);
+                updateError = retry.error;
+            }
             
             if (updateError) {
                 console.error('❌ Erro ao atualizar linha:', updateError);
                 throw updateError;
             }
             
-            console.log('✅ Linha', rowIndex, 'atualizada');
+            console.log('✅ Linha', originalRowIndex, 'atualizada (data:', date, ')');
         } else {
             // 3. INSERT linha nova
-            const { error: insertError } = await db
+            let { error: insertError } = await db
                 .from('mapa_encomendas')
                 .insert([rowData]);
+            
+            // 🔥 RETRY sem horario_carga se erro 400 (coluna não existe)
+            if (insertError && insertError.code === 'PGRST204' && rowData.horario_carga !== undefined) {
+                console.warn('⚠️ Coluna horario_carga não existe. Tentando salvar sem ela...');
+                delete rowData.horario_carga;
+                const retry = await db
+                    .from('mapa_encomendas')
+                    .insert([rowData]);
+                insertError = retry.error;
+            }
             
             if (insertError) {
                 console.error('❌ Erro ao inserir linha:', insertError);
                 throw insertError;
             }
             
-            console.log('✅ Linha', rowIndex, 'inserida');
+            console.log('✅ Linha', originalRowIndex, 'inserida (data:', date, ')');
         }
     } catch (error) {
         console.error('❌ Erro em saveRowData:', error);
@@ -2838,6 +3571,601 @@ async function deleteRow(index) {
     }
 }
 
+// ===================================================================
+// CALENDÁRIO SEMANAL (v2.51.0)
+// ===================================================================
+
+let currentCalendarioWeek = null;
+let currentDayOffset = 0; // 🔥 v2.51.16: Controla qual grupo de 3 dias mostrar (0=Seg-Qua, 1=Qui-Sex)
+
+// 🔥 Função para normalizar formato de data
+function normalizeDateFormat(dateStr) {
+    if (!dateStr) return '';
+    
+    // Se já está em formato DD/MM (5 caracteres: "04/03")
+    if (dateStr.length === 5 && dateStr.includes('/') && !isNaN(dateStr.split('/')[0]) && !isNaN(dateStr.split('/')[1])) {
+        const [dd, mm] = dateStr.split('/');
+        return `${dd.padStart(2, '0')}/${mm.padStart(2, '0')}`;
+    }
+    
+    // Se está em formato DD/MMM (6+ caracteres: "04/mar")
+    if (dateStr.includes('/')) {
+        const parts = dateStr.split('/');
+        const day = parts[0].padStart(2, '0');
+        const monthPart = parts[1];
+        
+        // Mapear nome do mês para número
+        const monthMap = {
+            'jan': '01', 'fev': '02', 'mar': '03', 'abr': '04',
+            'mai': '05', 'jun': '06', 'jul': '07', 'ago': '08',
+            'set': '09', 'out': '10', 'nov': '11', 'dez': '12'
+        };
+        
+        // Se é nome de mês (ex: "mar")
+        if (monthMap[monthPart.toLowerCase()]) {
+            return `${day}/${monthMap[monthPart.toLowerCase()]}`;
+        }
+        
+        // Se é número de mês (ex: "3")
+        if (!isNaN(monthPart)) {
+            return `${day}/${monthPart.padStart(2, '0')}`;
+        }
+    }
+    
+    // Fallback: retornar original
+    return dateStr;
+}
+
+function renderCalendarioSemanal() {
+    const container = document.getElementById('calendario-grid-container');
+    if (!container) return;
+    
+    // 🔥 BUGFIX v2.51.6: Limpar container ANTES de tudo (prevenir duplicação em hot-reload)
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:#666;">⏳ Carregando...</div>';
+    
+    // 🔥 BUGFIX v2.51.5: Garantir que weekTabs está inicializado
+    if (!weekTabs || weekTabs.length === 0) {
+        console.warn('⚠️ weekTabs não inicializado! Gerando agora...');
+        generateWeekTabs();
+    }
+    
+    // 🔥 FEATURE v2.51.15: Determinar semana ATUAL (data de hoje) ao invés da primeira
+    if (!currentCalendarioWeek && weekTabs.length > 0) {
+        const today = new Date();
+        const currentWeekNumber = getWeekNumber(today);
+        
+        // Se semana atual existe nas tabs, selecionar ela
+        if (weekTabs.includes(currentWeekNumber)) {
+            currentCalendarioWeek = currentWeekNumber;
+            console.log(`📅 Semana ATUAL selecionada automaticamente no Mapa Cargas: Semana ${currentCalendarioWeek}`);
+        } else {
+            // Fallback: semana mais próxima (primeira disponível)
+            currentCalendarioWeek = weekTabs[0];
+            console.log(`⚠️ Semana atual (${currentWeekNumber}) não encontrada. Usando primeira: Semana ${currentCalendarioWeek}`);
+        }
+    }
+    
+    // Verificar se ainda está vazio
+    if (!currentCalendarioWeek) {
+        console.error('❌ Erro: currentCalendarioWeek ainda está vazio!');
+        container.innerHTML = '<div style="padding:40px;text-align:center;color:#666;">⚠️ Erro ao carregar semanas. Recarregue a página.</div>';
+        return;
+    }
+    
+    // Atualizar número da semana no header
+    const weekNumEl = document.getElementById('calendario-week-num');
+    if (weekNumEl) {
+        weekNumEl.textContent = currentCalendarioWeek;
+    }
+    
+    // 🔥 BUGFIX v2.51.2: Filtrar apenas linhas com TRANSP preenchido da semana atual
+    const cargas = [];
+    
+    encomendasData.dates.forEach((date, originalIndex) => {
+        // Ignorar posições vazias (gaps no array)
+        if (!date || date.trim() === '') return;
+        
+        const semana = encomendasData.data[`${originalIndex}_sem`];
+        const transp = encomendasData.data[`${originalIndex}_transp`];
+        const horario = encomendasData.data[`${originalIndex}_horario_carga`] || '';
+        
+        // Filtrar por semana e TRANSP preenchido
+        if (parseInt(semana) !== currentCalendarioWeek || !transp || transp.trim() === '') {
+            return;
+        }
+        
+        cargas.push({
+            date: date,
+            index: originalIndex,  // Índice original (não posição no array filtrado)
+            cliente: encomendasData.data[`${originalIndex}_cliente`] || '',
+            local: encomendasData.data[`${originalIndex}_local`] || '',
+            medida: encomendasData.data[`${originalIndex}_medida`] || '',
+            qtd: encomendasData.data[`${originalIndex}_qtd`] || '',
+            transp: transp,
+            horario: horario,
+            obs: encomendasData.data[`${originalIndex}_obs`] || ''
+        });
+    });
+    
+    console.log('\n' + '='.repeat(60));
+    console.log(`📅 RENDER: Mapa Cargas - Semana ${currentCalendarioWeek}`);
+    console.log('='.repeat(60));
+    console.log(`   Total de dates no array: ${encomendasData.dates.length}`);
+    console.log(`   Dates não vazias: ${encomendasData.dates.filter(d => d && d.trim() !== '').length}`);
+    console.log(`   ✅ Cargas filtradas com TRANSP: ${cargas.length}`);
+    
+    if (cargas.length > 0) {
+        console.log(`\n   📦 Cargas que VÃO SER RENDERIZADAS:`);
+        cargas.forEach((carga, i) => {
+            console.log(`\n   [${i+1}] Carga:`);
+            console.log(`      date: "${carga.date}" (${carga.date.length} chars)`);
+            console.log(`      cliente: "${carga.cliente}"`);
+            console.log(`      local: "${carga.local}"`);
+            console.log(`      medida: "${carga.medida}"`);
+            console.log(`      qtd: "${carga.qtd}"`);
+            console.log(`      transp: "${carga.transp}"`);
+            console.log(`      horario: "${carga.horario}" (length: ${carga.horario.length})`);
+            
+            // 🔍 DEBUG especial para CORK SUPPLY
+            if (carga.cliente && carga.cliente.includes('CORK SUPPLY')) {
+                console.log(`      🔍 CORK SUPPLY detectado!`);
+                console.log(`         Local: "${carga.local}"`);
+                console.log(`         Horário raw: [${Array.from(carga.horario).map(c => c.charCodeAt(0)).join(',')}]`);
+            }
+        });
+    } else {
+        console.warn('\n   ❌ PROBLEMA: Nenhuma carga passou o filtro!');
+        console.warn('   Verificar:');
+        console.warn('      1) Campo TRANSP está preenchido?');
+        console.warn('      2) Campo SEM corresponde à semana atual?');
+        console.warn(`      3) currentCalendarioWeek = ${currentCalendarioWeek}`);
+    }
+    
+    // Construir array de seg-sex da semana
+    const allWeekDates = getWeekDates(currentCalendarioWeek);
+    
+    // 🔥 v2.51.16: Mostrar apenas 3 dias por vez (navegação por grupos)
+    // Grupo 0: Seg-Qua (0,1,2), Grupo 1: Qui-Sex (3,4)
+    const startIdx = currentDayOffset * 3;
+    const endIdx = Math.min(startIdx + 3, allWeekDates.length);
+    const weekDates = allWeekDates.slice(startIdx, endIdx);
+    
+    console.log(`\n📅 Dias da semana ${currentCalendarioWeek} (todos):`, allWeekDates.map(d => d.dateStr));
+    console.log(`📅 Exibindo dias ${startIdx}-${endIdx-1}:`, weekDates.map(d => d.dateStr));
+    
+    // 🔍 DEBUG: Verificar matching
+    if (cargas.length > 0) {
+        console.log(`\n🔍 MATCHING: Verificar se datas das cargas existem na semana:`);
+        cargas.forEach(carga => {
+            const normalized = normalizeDateFormat(carga.date);
+            const found = weekDates.find(d => d.dateStr === normalized);
+            
+            if (normalized !== carga.date) {
+                console.log(`   🔄 Normalizado: "${carga.date}" → "${normalized}"`);
+            }
+            
+            if (found) {
+                console.log(`   ✅ "${normalized}" encontrada → dia ${found.dayName}`);
+            } else {
+                console.warn(`   ❌ "${normalized}" NÃO encontrada!`);
+                console.warn(`      Dias disponíveis:`, weekDates.map(d => d.dateStr).join(', '));
+            }
+        });
+    }
+    
+    // Time slots (linha "Sem Horário" + 7 slots)
+    const timeSlots = [
+        'SEM_HORARIO',  // Linha especial para cargas sem horário
+        '06:00 - 08:00',
+        '08:00 - 10:00',
+        '10:00 - 12:00',
+        '12:00 - 14:00',
+        '14:00 - 16:00',
+        '16:00 - 18:00',
+        '18:00 - 20:00'
+    ];
+    
+    // 🔥 v2.51.16: Criar navegação de dias (< Anterior | Próximo >)
+    const navContainer = document.createElement('div');
+    navContainer.style.cssText = 'display:flex;justify-content:center;align-items:center;gap:16px;margin-bottom:16px;padding:12px;background:#f5f5f7;border-radius:8px;';
+    
+    const btnPrev = document.createElement('button');
+    btnPrev.innerHTML = '← Seg-Qua';
+    btnPrev.style.cssText = 'padding:8px 16px;background:#007AFF;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;';
+    btnPrev.disabled = currentDayOffset === 0;
+    if (btnPrev.disabled) btnPrev.style.opacity = '0.4';
+    btnPrev.onclick = () => {
+        if (currentDayOffset > 0) {
+            currentDayOffset--;
+            renderCalendarioSemanal();
+        }
+    };
+    
+    const labelDays = document.createElement('div');
+    labelDays.style.cssText = 'font-weight:700;font-size:14px;color:#333;';
+    const dayNames = weekDates.map(d => d.dayName).join(' • ');
+    labelDays.textContent = `${dayNames}`;
+    
+    const btnNext = document.createElement('button');
+    btnNext.innerHTML = 'Qui-Sex →';
+    btnNext.style.cssText = 'padding:8px 16px;background:#007AFF;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;';
+    btnNext.disabled = endIdx >= allWeekDates.length;
+    if (btnNext.disabled) btnNext.style.opacity = '0.4';
+    btnNext.onclick = () => {
+        if (endIdx < allWeekDates.length) {
+            currentDayOffset++;
+            renderCalendarioSemanal();
+        }
+    };
+    
+    navContainer.appendChild(btnPrev);
+    navContainer.appendChild(labelDays);
+    navContainer.appendChild(btnNext);
+    
+    // Criar grid
+    const grid = document.createElement('div');
+    grid.className = 'calendario-grid';
+    
+    // Header Row
+    const headerTime = document.createElement('div');
+    headerTime.className = 'calendario-header-cell';
+    headerTime.textContent = 'Horário';
+    grid.appendChild(headerTime);
+    
+    weekDates.forEach(d => {
+        const header = document.createElement('div');
+        header.className = 'calendario-header-cell';
+        header.innerHTML = `<div style="font-weight:700;">${d.dayName}</div><div style="font-size:12px;color:#666;margin-top:4px;">${d.dateStr}</div>`;
+        grid.appendChild(header);
+    });
+    
+    // Contador de blocos renderizados
+    let totalBlocosRenderizados = 0;
+    
+    // 🔥 v2.51.6: Agrupar cargas por dia e calcular row-span
+    const cargasPorDia = {};
+    
+    // 🔍 DEBUG: Log TODAS as cargas do dia 04/03 ANTES de processar
+    console.log('\n🔍🔍🔍 DEBUG PRÉ-PROCESSAMENTO: Cargas do dia 04/03 🔍🔍🔍');
+    const cargasDia04 = cargas.filter(c => normalizeDateFormat(c.date) === '04/03');
+    console.log(`   Total de cargas no dia 04/03: ${cargasDia04.length}`);
+    cargasDia04.forEach((c, idx) => {
+        console.log(`\n   [${idx}] Cliente: "${c.cliente}"`);
+        console.log(`       Horário RAW (antes de normalizar): "${c.horario}"`);
+        console.log(`       Data: "${c.date}"`);
+    });
+    console.log('\n');
+    
+    weekDates.forEach(d => {
+        cargasPorDia[d.dateStr] = cargas
+            .filter(c => normalizeDateFormat(c.date) === d.dateStr)
+            .map(c => {
+                // Calcular quantos slots este horário deve ocupar
+                let slots = [];
+                let rowSpan = 1;
+                
+                // 🔥 Normalizar horário: remover espaços extras e usar formato padrão
+                const horarioNormalizado = c.horario 
+                    ? c.horario.trim().replace(/\s+/g, ' ')  // Múltiplos espaços → 1 espaço
+                    : '';
+                
+                if (!horarioNormalizado || horarioNormalizado === '') {
+                    // Sem horário: linha especial no topo
+                    slots = ['SEM_HORARIO'];
+                    rowSpan = 1;
+                } else if (horarioNormalizado === 'Manhã') {
+                    // Manhã: 06-12 (3 slots)
+                    slots = ['06:00 - 08:00'];
+                    rowSpan = 3;
+                } else if (horarioNormalizado === 'Tarde') {
+                    // Tarde: 12-20 (4 slots)
+                    slots = ['12:00 - 14:00'];
+                    rowSpan = 4;
+                } else {
+                    // Horário específico: normalizar formato
+                    // Aceita "08:00-10:00" ou "08:00 - 10:00" → sempre usar " - " (com espaços)
+                    const horarioComEspacos = horarioNormalizado.replace(/\s*-\s*/, ' - ');
+                    slots = [horarioComEspacos];
+                    rowSpan = 1;
+                }
+                
+                // Retornar carga com horário normalizado
+                return { 
+                    ...c, 
+                    horario: horarioNormalizado,  // Usar horário normalizado
+                    slots, 
+                    rowSpan 
+                };
+            });
+    });
+    
+    // Set para rastrear células já ocupadas (prevenir sobreposição)
+    const celulasOcupadas = {}; // formato: "dia_slot" -> true
+    
+    // Rows por horário
+    timeSlots.forEach(slot => {
+        // Coluna de horário
+        const timeCell = document.createElement('div');
+        timeCell.className = 'calendario-time-cell';
+        
+        // Tratamento especial para linha "SEM HORÁRIO"
+        if (slot === 'SEM_HORARIO') {
+            timeCell.textContent = '⚠️ Sem Horário';
+            timeCell.style.background = '#FFE5CC';
+            timeCell.style.color = '#FF9500';
+            timeCell.style.fontWeight = '700';
+            timeCell.style.fontSize = '13px';
+        } else {
+            timeCell.textContent = slot;
+        }
+        
+        grid.appendChild(timeCell);
+        
+        // Células por dia da semana
+        weekDates.forEach(d => {
+            const dayCell = document.createElement('div');
+            dayCell.className = 'calendario-day-cell';
+            
+            const celKey = `${d.dateStr}_${slot}`;
+            
+            // Encontrar cargas que COMEÇAM neste slot
+            const cargasNesteDia = cargasPorDia[d.dateStr] || [];
+            const cargasNesteSlot = cargasNesteDia.filter(c => c.slots.includes(slot));
+            
+            // 🔍 DEBUG: Log DETALHADO para TODOS os slots (ANTES de verificar células ocupadas!)
+            if (slot !== 'SEM_HORARIO' && cargasNesteDia.length > 0) {
+                console.log(`\n🔍 DEBUG Slot "${slot}" no dia ${d.dateStr}:`);
+                console.log(`   Total cargas no dia: ${cargasNesteDia.length}`);
+                cargasNesteDia.forEach((c, idx) => {
+                    console.log(`\n   [${idx}] Cliente: "${c.cliente}"`);
+                    console.log(`       Horário original: "${c.horario}"`);
+                    console.log(`       Horário normalizado: "${c.horario}"`);
+                    console.log(`       Slots calculados: [${c.slots.join(', ')}]`);
+                    console.log(`       RowSpan: ${c.rowSpan}`);
+                    console.log(`       Match com "${slot}"? ${c.slots.includes(slot)}`);
+                    
+                    // Comparação byte-a-byte
+                    if (c.slots.length > 0 && c.slots[0]) {
+                        const slotCarga = c.slots[0];
+                        console.log(`       Comparação byte-a-byte:`);
+                        console.log(`          Slot esperado: "${slot}" [${Array.from(slot).map(ch => ch.charCodeAt(0)).join(',')}]`);
+                        console.log(`          Slot da carga: "${slotCarga}" [${Array.from(slotCarga).map(ch => ch.charCodeAt(0)).join(',')}]`);
+                        console.log(`          Iguais? ${slot === slotCarga}`);
+                    }
+                });
+                console.log(`   Cargas que matcham este slot: ${cargasNesteSlot.length}`);
+            }
+            
+            // 🔥 BUGFIX v2.51.14: Se célula ocupada, ocultar MAS permitir renderização de novas cargas
+            const celulaOcupadaPorExpandido = celulasOcupadas[celKey];
+            
+            if (celulaOcupadaPorExpandido && cargasNesteSlot.length === 0) {
+                // Célula ocupada e SEM cargas novas → apenas ocultar
+                console.log(`   ⚠️ Célula ocupada por bloco expandido - sem cargas novas`);
+                dayCell.style.visibility = 'hidden';
+                grid.appendChild(dayCell);
+                return;
+            }
+            
+            if (celulaOcupadaPorExpandido && cargasNesteSlot.length > 0) {
+                // Célula ocupada MAS existem cargas novas → renderizar por cima
+                console.log(`   ✅ Célula ocupada mas com ${cargasNesteSlot.length} carga(s) nova(s) - renderizar por cima!`);
+                dayCell.style.position = 'relative'; // Permitir sobreposição
+            }
+            
+            // Renderizar eventos
+            cargasNesteSlot.forEach((carga, cargoIdx) => {
+                totalBlocosRenderizados++;
+                
+                // 🔥 v2.51.18: Marcar células ocupadas por blocos expandidos (restaurar lógica original)
+                // Mas apenas para PRIMEIRA carga do slot (outras renderizam horizontalmente)
+                if (cargoIdx === 0 && carga.rowSpan > 1) {
+                    // Primeira carga marca células verticais (bloco expandido)
+                    const slotIndex = timeSlots.indexOf(slot);
+                    for (let i = 0; i < carga.rowSpan; i++) {
+                        const ocupadoSlot = timeSlots[slotIndex + i];
+                        if (ocupadoSlot) {
+                            celulasOcupadas[`${d.dateStr}_${ocupadoSlot}`] = true;
+                        }
+                    }
+                }
+                
+                const event = document.createElement('div');
+                event.className = 'calendario-event';
+                
+                // 🔥 v2.51.19: Position absolute para blocos expandidos + empilhamento horizontal uniforme
+                if (carga.rowSpan > 1) {
+                    event.classList.add('expanded');
+                    
+                    // 🔥 v2.51.20: Calcular altura total (cada célula = 100px + 2px border = 102px)
+                    const alturaTotal = (carga.rowSpan * 102) - 10; // -10px para padding
+                    event.style.height = `${alturaTotal}px`;
+                    event.style.top = '0';
+                    event.style.zIndex = '5';
+                    
+                    // 🔥 TODAS as cargas têm largura uniforme (não só as > 0)
+                    const totalCargasNesteSlot = cargasNesteSlot.length;
+                    
+                    if (totalCargasNesteSlot === 1) {
+                        // Apenas 1 carga: ocupar toda a largura
+                        event.style.left = '8px';
+                        event.style.right = '8px';
+                    } else {
+                        // Múltiplas cargas: dividir horizontalmente
+                        const larguraPorBloco = Math.floor(96 / totalCargasNesteSlot); // 96% dividido (deixar 4% de margem)
+                        const offsetHorizontal = cargoIdx * (larguraPorBloco + 1); // +1% de gap
+                        
+                        event.style.left = `${offsetHorizontal + 2}%`; // +2% margem inicial
+                        event.style.right = 'auto';
+                        event.style.width = `${larguraPorBloco}%`;
+                    }
+                } else if (celulaOcupadaPorExpandido) {
+                    // Carga específica sobre célula ocupada → z-index maior
+                    event.style.position = 'relative';
+                    event.style.zIndex = '10';
+                    event.style.marginTop = '4px';
+                }
+                
+                // Badge visual do horário
+                let badgeHorario = '';
+                let backgroundColor = '';
+                
+                if (!carga.horario || carga.horario.trim() === '') {
+                    // Sem horário: Laranja
+                    badgeHorario = '<span style="background:#FF9500;color:white;font-size:9px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:4px;">⚠️ SEM HORÁRIO</span>';
+                    backgroundColor = 'linear-gradient(135deg, #FF9500 0%, #FF6B00 100%)';
+                } else if (carga.horario === 'Manhã') {
+                    // Manhã: AZUL
+                    badgeHorario = '<span style="background:#007AFF;color:white;font-size:9px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:4px;">☀️ MANHÃ (06-12h)</span>';
+                    backgroundColor = 'linear-gradient(135deg, #007AFF 0%, #0051D5 100%)';
+                } else if (carga.horario === 'Tarde') {
+                    // Tarde: AZUL
+                    badgeHorario = '<span style="background:#007AFF;color:white;font-size:9px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:4px;">🌆 TARDE (12-20h)</span>';
+                    backgroundColor = 'linear-gradient(135deg, #007AFF 0%, #0051D5 100%)';
+                } else {
+                    // Horários específicos: AZUL
+                    badgeHorario = `<span style="background:#007AFF;color:white;font-size:9px;padding:2px 6px;border-radius:4px;font-weight:600;margin-left:4px;">🕐 ${carga.horario}</span>`;
+                    backgroundColor = 'linear-gradient(135deg, #007AFF 0%, #0051D5 100%)';
+                }
+                
+                // Aplicar cor de fundo específica
+                event.style.background = backgroundColor;
+                
+                event.innerHTML = `
+                    <div class="calendario-event-title">${carga.cliente || '(sem cliente)'}${badgeHorario}</div>
+                    <div class="calendario-event-details">
+                        📍 ${carga.local || '---'}<br>
+                        📦 ${carga.medida || '---'} × ${carga.qtd || '---'}<br>
+                        🚚 ${carga.transp}
+                    </div>
+                `;
+                event.onclick = () => {
+                    console.log('🔵 Clique em carga:', carga);
+                    showToast(`📦 ${carga.cliente} | ${carga.local}`, 'info');
+                };
+                dayCell.appendChild(event);
+            });
+            
+            grid.appendChild(dayCell);
+        });
+    });
+    
+    container.innerHTML = '';
+    container.appendChild(navContainer); // 🔥 v2.51.16: Navegação de dias
+    container.appendChild(grid);
+    
+    console.log(`\n🎨 RESULTADO FINAL:`);
+    console.log(`   ✅ Total de blocos renderizados no calendário: ${totalBlocosRenderizados}`);
+    
+    if (totalBlocosRenderizados === 0 && cargas.length > 0) {
+        console.error(`\n   ❌ ERRO: ${cargas.length} carga(s) encontrada(s), mas NENHUM bloco foi renderizado!`);
+        console.error(`   Isto significa que as datas não estão a fazer match com os dias da semana.`);
+    }
+    
+    console.log('='.repeat(60) + '\n');
+}
+
+function getWeekDates(weekNumber) {
+    // Construir array de seg-sex da semana indicada
+    const monthIndex = {
+        'jan': 0, 'fev': 1, 'mar': 2, 'abr': 3, 'mai': 4, 'jun': 5,
+        'jul': 6, 'ago': 7, 'set': 8, 'out': 9, 'nov': 10, 'dez': 11
+    }[currentMonth];
+    
+    const firstDay = new Date(currentYear, monthIndex, 1);
+    const lastDay = new Date(currentYear, monthIndex + 1, 0);
+    
+    const result = [];
+    
+    for (let d = new Date(firstDay); d <= lastDay; d.setDate(d.getDate() + 1)) {
+        const wn = getWeekNumber(d);
+        if (wn === weekNumber) {
+            const dayOfWeek = d.getDay(); // 0=dom, 1=seg, ..., 6=sab
+            if (dayOfWeek >= 1 && dayOfWeek <= 5) { // seg-sex
+                const dd = String(d.getDate()).padStart(2, '0');
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dateStr = `${dd}/${mm}`;
+                
+                const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+                const dayName = dayNames[dayOfWeek];
+                
+                result.push({ dateStr, dayName });
+            }
+        }
+    }
+    
+    return result;
+}
+
+function prevWeekCalendario() {
+    const currentIndex = weekTabs.indexOf(currentCalendarioWeek);
+    if (currentIndex > 0) {
+        currentCalendarioWeek = weekTabs[currentIndex - 1];
+        currentDayOffset = 0; // 🔥 v2.51.16: Resetar para Seg-Qua ao mudar semana
+        renderCalendarioSemanal();
+    } else {
+        showToast('⚠️ Já está na primeira semana', 'info');
+    }
+}
+
+function nextWeekCalendario() {
+    const currentIndex = weekTabs.indexOf(currentCalendarioWeek);
+    if (currentIndex < weekTabs.length - 1) {
+        currentCalendarioWeek = weekTabs[currentIndex + 1];
+        currentDayOffset = 0; // 🔥 v2.51.16: Resetar para Seg-Qua ao mudar semana
+        renderCalendarioSemanal();
+    } else {
+        showToast('⚠️ Já está na última semana', 'info');
+    }
+}
+
+function refreshCalendario() {
+    renderCalendarioSemanal();
+    showToast('🔄 Calendário atualizado', 'success');
+}
+
+// 🔍 DEBUG: Função para investigar dados
+function debugMapaCargas() {
+    console.log('='.repeat(60));
+    console.log('🔍 DEBUG MAPA CARGAS');
+    console.log('='.repeat(60));
+    
+    console.log('📊 Estado atual:');
+    console.log(`   currentCalendarioWeek: ${currentCalendarioWeek}`);
+    console.log(`   currentMonth: ${currentMonth}`);
+    console.log(`   currentYear: ${currentYear}`);
+    
+    console.log('\n📅 encomendasData.dates (primeiras 10):');
+    encomendasData.dates.slice(0, 10).forEach((date, i) => {
+        console.log(`   [${i}]: "${date}"`);
+    });
+    
+    console.log('\n📦 encomendasData.data (primeiros 20 campos):');
+    const keys = Object.keys(encomendasData.data).slice(0, 20);
+    keys.forEach(key => {
+        console.log(`   ${key}: "${encomendasData.data[key]}"`);
+    });
+    
+    console.log('\n🔍 Procurar campos TRANSP preenchidos:');
+    const transpKeys = Object.keys(encomendasData.data).filter(k => k.includes('_transp') && encomendasData.data[k]);
+    console.log(`   Total de campos TRANSP: ${transpKeys.length}`);
+    transpKeys.forEach(key => {
+        const index = parseInt(key.split('_')[0]);
+        const date = encomendasData.dates[index];
+        const semana = encomendasData.data[`${index}_sem`];
+        const cliente = encomendasData.data[`${index}_cliente`];
+        const horario = encomendasData.data[`${index}_horario_carga`];
+        
+        console.log(`   ${key}: "${encomendasData.data[key]}"`);
+        console.log(`      → index: ${index}, date: "${date}", semana: ${semana}, cliente: "${cliente}", horario: "${horario}"`);
+    });
+    
+    console.log('='.repeat(60));
+}
+
+// Adicionar à janela global
+window.debugMapaCargas = debugMapaCargas;
+
 // Adicionar novo DIA (20 linhas vazias com a mesma data)
 async function addNewDay() {
     const lastDate = encomendasData.dates[encomendasData.dates.length - 1];
@@ -2921,7 +4249,7 @@ document.addEventListener('fullscreenchange', () => {
     }
 });
 
-console.log('🚀 APP.JS CARREGADO - VERSÃO 2.23.3 - PROTEÇÕES USO PROLONGADO + FULLSCREEN - ' + new Date().toLocaleTimeString());
+console.log('🚀 APP.JS v2.50.3 - CORES + Código Único na BD - ' + new Date().toLocaleTimeString());
 
 // 🛠️ FUNÇÕES DE DEBUG (chamar do console)
 window.debugSecagens = function() {
@@ -2933,7 +4261,7 @@ window.debugSecagens = function() {
     secagens.forEach((s, idx) => {
         console.log(`${idx + 1}. ID: ${s.id}`);
         console.log(`   Estufa: ${s.estufa_id}`);
-        console.log(`   Cliente: ${s.cliente || 'N/A'}`);
+        console.log(`   Status: ${s.status || 'N/A'}`);
         console.log(`   Início: ${formatDateTime(s.start_time)}`);
         console.log(`   Fim: ${formatDateTime(s.end_time)}`);
         console.log(`   Created: ${new Date(s.created_at).toLocaleString()}`);
@@ -2983,6 +4311,7 @@ console.log('\n💡 Funções de debug disponíveis:');
 console.log('   debugSecagens() - Listar todas as secagens');
 console.log('   listarSecagensEstufa(3) - Listar secagens da estufa 3');
 console.log('   apagarSecagemFantasma("id-aqui") - Apagar secagem fantasma');
+console.log('   debugMapaCargas() - Investigar dados do Mapa de Cargas');
 console.log('');
 checkAuthState();
 initMatrixSystem();
