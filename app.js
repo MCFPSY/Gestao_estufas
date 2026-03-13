@@ -3,7 +3,7 @@
 // Versão: v2.51.6 - BUGFIX: Duplicação em hot-reload (developer)
 // Data: 09/03/2026
 // ===================================================================
-console.log('🚀 APP.JS v2.51.21 - BUGFIX CRÍTICO: Mês e ano detectados AUTOMATICAMENTE (não fica preso em Março 2026)');
+console.log('🚀 APP.JS v2.51.22 - BUGFIX CRÍTICO: Grid dinâmico Seg-Qua (3 cols) e Qui-Sex (2 cols) - navegação corrigida!');
 
 // ===================================================================
 // SISTEMA DE SAVE COM DEBOUNCING E QUEUE (Fase 1 - Trabalho Concorrente)
@@ -3806,6 +3806,11 @@ function renderCalendarioSemanal() {
     const grid = document.createElement('div');
     grid.className = 'calendario-grid';
     
+    // 🔥 v2.51.22: BUGFIX - Ajustar número de colunas dinamicamente (2 ou 3 dias)
+    const numColunas = weekDates.length;
+    grid.style.gridTemplateColumns = `140px repeat(${numColunas}, 1fr)`;
+    console.log(`📐 Grid configurado para ${numColunas} colunas (dias: ${weekDates.map(d => d.dayName).join(', ')})`);
+    
     // Header Row
     const headerTime = document.createElement('div');
     headerTime.className = 'calendario-header-cell';
@@ -4315,3 +4320,4 @@ console.log('   debugMapaCargas() - Investigar dados do Mapa de Cargas');
 console.log('');
 checkAuthState();
 initMatrixSystem();
+
