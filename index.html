@@ -2012,6 +2012,7 @@
         <div class="login-card">
             <div class="login-header">
                 <div style="text-align: center;">
+                    <img src="images/logo.png" alt="PSY Logo" style="width: 120px; height: 120px; object-fit: contain; margin: 0 auto 16px; border-radius: 8px;">
                     <h1 style="margin-bottom: 4px; font-size: 32px; font-weight: 700;">PSY</h1>
                     <p style="margin: 0; font-size: 14px; color: #86868B; font-weight: 400;">Gestão de secagens, encomendas e cargas</p>
                 </div>
@@ -2043,12 +2044,13 @@
         <!-- Header -->
         <div class="app-header">
             <div class="app-logo">
-                <div class="app-icon">🌡️</div>
+                <div class="app-icon" style="background: transparent; display: flex; align-items: center; justify-content: center; padding: 4px;">
+                    <!-- 🔥 v2.51.24: Logo PSY -->
+                    <img src="images/logo.png" alt="PSY Logo" style="width: 40px; height: 40px; object-fit: contain; border-radius: 6px;">
+                </div>
                 <div class="app-title-text">
-                    <div class="app-title-text">
                     <h1 style="margin-bottom: 2px;">PSY</h1>
                     <p style="margin: 0; font-size: 11px; color: #86868B; font-weight: 400; line-height: 1.2;">Gestão de secagens,<br>encomendas e cargas</p>
-                </div>
                 </div>
             </div>
             
@@ -2080,9 +2082,6 @@
             </button>
             <button class="tab-btn" data-tab="calendario">
                 🚚 Mapa Cargas
-            </button>
-            <button class="tab-btn" data-tab="utilizadores">
-                👥 Utilizadores
             </button>
         </div>
         
@@ -2216,11 +2215,6 @@
         </div>
         
         <!-- Tab 5: Utilizadores -->
-        <div id="tab-utilizadores" class="tab-content">
-            <div class="dashboard-section">
-                <h2>Em desenvolvimento...</h2>
-            </div>
-        </div>
     </div>
     
     <!-- Modal Secagem -->
@@ -2355,6 +2349,101 @@
         </div>
     </div>
     
+    <!-- 🔥 v2.51.23: Modal de Detalhes da Carga -->
+    <div class="modal" id="modal-carga-details" style="display:none;">
+        <div class="modal-dialog" style="max-width: 600px;">
+            <div class="modal-sidebar" id="modal-carga-sidebar" style="background: #007AFF;"></div>
+            
+            <div class="modal-body">
+                <button class="modal-close" onclick="closeCargaModal()">×</button>
+                
+                <div class="modal-header">
+                    <h3 id="modal-carga-title">📦 Detalhes da Carga</h3>
+                    <p class="modal-subtitle" id="modal-carga-subtitle">04/03/2026 • Seg</p>
+                </div>
+                
+                <div class="carga-details-content" style="padding: 24px;">
+                    <!-- Cliente -->
+                    <div class="detail-row" style="margin-bottom: 20px;">
+                        <div class="detail-label" style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px;">
+                            👤 CLIENTE
+                        </div>
+                        <div class="detail-value" id="carga-cliente" style="font-size: 18px; font-weight: 600; color: #1D1D1F;">
+                            ---
+                        </div>
+                    </div>
+                    
+                    <!-- Local -->
+                    <div class="detail-row" style="margin-bottom: 20px;">
+                        <div class="detail-label" style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px;">
+                            📍 LOCAL
+                        </div>
+                        <div class="detail-value" id="carga-local" style="font-size: 16px; color: #1D1D1F;">
+                            ---
+                        </div>
+                    </div>
+                    
+                    <!-- Medida e Quantidade -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+                        <div class="detail-row">
+                            <div class="detail-label" style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px;">
+                                📐 MEDIDA
+                            </div>
+                            <div class="detail-value" id="carga-medida" style="font-size: 16px; color: #1D1D1F;">
+                                ---
+                            </div>
+                        </div>
+                        
+                        <div class="detail-row">
+                            <div class="detail-label" style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px;">
+                                📦 QUANTIDADE
+                            </div>
+                            <div class="detail-value" id="carga-qtd" style="font-size: 16px; color: #1D1D1F; font-weight: 700;">
+                                ---
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Transporte -->
+                    <div class="detail-row" style="margin-bottom: 20px;">
+                        <div class="detail-label" style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px;">
+                            🚚 TRANSPORTE
+                        </div>
+                        <div class="detail-value" id="carga-transp" style="font-size: 16px; color: #1D1D1F; font-weight: 600;">
+                            ---
+                        </div>
+                    </div>
+                    
+                    <!-- Horário -->
+                    <div class="detail-row" style="margin-bottom: 20px; background: #F5F5F7; padding: 12px; border-radius: 10px;">
+                        <div class="detail-label" style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px;">
+                            🕐 HORÁRIO
+                        </div>
+                        <div class="detail-value" id="carga-horario" style="font-size: 16px; color: #007AFF; font-weight: 700;">
+                            ---
+                        </div>
+                    </div>
+                    
+                    <!-- Observações (opcional) -->
+                    <div class="detail-row" id="carga-obs-container" style="margin-bottom: 20px; background: #FFF4E6; padding: 12px; border-radius: 10px; border-left: 3px solid #FF9500; display: none;">
+                        <div class="detail-label" style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 6px;">
+                            📝 OBSERVAÇÕES
+                        </div>
+                        <div class="detail-value" id="carga-obs" style="font-size: 14px; color: #1D1D1F; line-height: 1.5;">
+                            ---
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="modal-footer" style="padding: 16px 24px; border-top: 1px solid #E5E5EA;">
+                    <button type="button" class="btn-primary" onclick="closeCargaModal()" style="width: 100%;">
+                        ✓ Fechar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <script>
         // CONFIG
         const SUPABASE_URL = 'https://sawmdixlevjghlikvakv.supabase.co';
@@ -2409,3 +2498,4 @@
     <script src="app.js"></script>
 </body>
 </html>
+
