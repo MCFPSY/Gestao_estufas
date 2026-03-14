@@ -1,9 +1,9 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.24 - Logo personalizado + Aba Utilizadores removida
+// Versão: v2.51.25 - Sticky Estufa + Mobile Estufas Live (6,7,5)
 // Data: 14/03/2026
 // ===================================================================
-console.log('🚀 APP.JS v2.51.24 - Logo personalizado PSY + Aba Utilizadores removida');
+console.log('🚀 APP.JS v2.51.25 - Coluna Estufa fixa + Mobile mostra apenas estufas 6,7,5');
 
 // ===================================================================
 // SISTEMA DE SAVE COM DEBOUNCING E QUEUE (Fase 1 - Trabalho Concorrente)
