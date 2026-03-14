@@ -2020,21 +2020,34 @@
             .gantt-section, .dashboard-section { padding: 16px; }
             .gantt-grid { font-size: 12px; }
             
-            /* 📱 Mobile: Estufas live - mostrar apenas 6, 7, 5 com zoom-out */
+            /* 📱 Mobile: Layout otimizado - TODAS as 7 estufas visíveis */
             .dashboard-grid {
-                zoom: 0.75;
-                -moz-transform: scale(0.75);
-                -moz-transform-origin: top left;
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                padding: 16px;
+                min-height: auto;
             }
             
-            /* Esconder estufas 1, 2, 3, 4 no mobile */
-            .dashboard-grid .estufa-card:nth-child(1),
-            .dashboard-grid .estufa-card:nth-child(2),
-            .dashboard-grid .estufa-card:nth-child(3),
-            .dashboard-grid .estufa-card:nth-child(4) {
+            /* Resetar posicionamento grid no mobile */
+            .dashboard-grid .estufa-card[data-estufa="1"],
+            .dashboard-grid .estufa-card[data-estufa="2"],
+            .dashboard-grid .estufa-card[data-estufa="3"],
+            .dashboard-grid .estufa-card[data-estufa="4"],
+            .dashboard-grid .estufa-card[data-estufa="5"],
+            .dashboard-grid .estufa-card[data-estufa="6"],
+            .dashboard-grid .estufa-card[data-estufa="7"] {
+                grid-column: auto;
+                grid-row: auto;
+                min-width: 100%;
+                min-height: auto;
+            }
+            
+            /* Esconder workspace e labels no mobile */
+            .factory-workspace,
+            .factory-label {
                 display: none !important;
             }
-            .dashboard-grid { grid-template-columns: 1fr; }
             .modal-dialog { max-width: 100%; margin: 0; border-radius: 20px 20px 0 0; }
             .form-row, .cargo-row { grid-template-columns: 1fr; }
             
