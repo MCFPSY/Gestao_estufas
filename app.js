@@ -1,9 +1,9 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.6 - BUGFIX: Duplicação em hot-reload (developer)
-// Data: 09/03/2026
+// Versão: v2.51.24 - Logo personalizado + Aba Utilizadores removida
+// Data: 14/03/2026
 // ===================================================================
-console.log('🚀 APP.JS v2.51.22 - BUGFIX CRÍTICO: Grid dinâmico Seg-Qua (3 cols) e Qui-Sex (2 cols) - navegação corrigida!');
+console.log('🚀 APP.JS v2.51.24 - Logo personalizado PSY + Aba Utilizadores removida');
 
 // ===================================================================
 // SISTEMA DE SAVE COM DEBOUNCING E QUEUE (Fase 1 - Trabalho Concorrente)
@@ -4044,9 +4044,10 @@ function renderCalendarioSemanal() {
                         🚚 ${carga.transp}
                     </div>
                 `;
+                // 🔥 v2.51.23: Abrir modal de detalhes ao clicar
                 event.onclick = () => {
                     console.log('🔵 Clique em carga:', carga);
-                    showToast(`📦 ${carga.cliente} | ${carga.local}`, 'info');
+                    showCargaDetails(carga, d.dayName, d.dateStr);
                 };
                 dayCell.appendChild(event);
             });
@@ -4318,6 +4319,72 @@ console.log('   listarSecagensEstufa(3) - Listar secagens da estufa 3');
 console.log('   apagarSecagemFantasma("id-aqui") - Apagar secagem fantasma');
 console.log('   debugMapaCargas() - Investigar dados do Mapa de Cargas');
 console.log('');
+
+// ===================================================================
+// 🔥 v2.51.23: MODAL DE DETALHES DA CARGA
+// ===================================================================
+
+function showCargaDetails(carga, dayName, dateStr) {
+    console.log('📦 Abrindo detalhes da carga:', carga);
+    
+    const modal = document.getElementById('modal-carga-details');
+    
+    // Atualizar título e subtítulo
+    document.getElementById('modal-carga-title').textContent = `📦 ${carga.cliente || '(sem cliente)'}`;
+    document.getElementById('modal-carga-subtitle').textContent = `${dateStr} • ${dayName}`;
+    
+    // Atualizar campos
+    document.getElementById('carga-cliente').textContent = carga.cliente || '---';
+    document.getElementById('carga-local').textContent = carga.local || '---';
+    document.getElementById('carga-medida').textContent = carga.medida || '---';
+    document.getElementById('carga-qtd').textContent = carga.qtd ? `${carga.qtd} un` : '---';
+    document.getElementById('carga-transp').textContent = carga.transp || '---';
+    
+    // Horário com badge colorido
+    const horarioEl = document.getElementById('carga-horario');
+    if (!carga.horario || carga.horario.trim() === '') {
+        horarioEl.textContent = '⚠️ Sem Horário Definido';
+        horarioEl.style.color = '#FF9500';
+    } else if (carga.horario === 'Manhã') {
+        horarioEl.textContent = '☀️ Manhã (06:00 - 12:00)';
+        horarioEl.style.color = '#007AFF';
+    } else if (carga.horario === 'Tarde') {
+        horarioEl.textContent = '🌆 Tarde (12:00 - 20:00)';
+        horarioEl.style.color = '#007AFF';
+    } else {
+        horarioEl.textContent = `🕐 ${carga.horario}`;
+        horarioEl.style.color = '#007AFF';
+    }
+    
+    // Observações (mostrar apenas se existir)
+    const obsContainer = document.getElementById('carga-obs-container');
+    const obsValue = document.getElementById('carga-obs');
+    
+    if (carga.obs && carga.obs.trim() !== '') {
+        obsValue.textContent = carga.obs;
+        obsContainer.style.display = 'block';
+    } else {
+        obsContainer.style.display = 'none';
+    }
+    
+    // Mostrar modal
+    modal.style.display = 'flex';
+    
+    // Animação de entrada
+    setTimeout(() => {
+        modal.classList.add('active');
+    }, 10);
+}
+
+function closeCargaModal() {
+    const modal = document.getElementById('modal-carga-details');
+    modal.classList.remove('active');
+    
+    setTimeout(() => {
+        modal.style.display = 'none';
+    }, 300);
+}
+
 checkAuthState();
 initMatrixSystem();
 
