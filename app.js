@@ -1,9 +1,9 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.27 - BUGFIX: Inserir/apagar linhas com filtro de semana ativo
+// Versão: v2.51.30 - BUGFIX: Empilhamento horizontal para horários específicos
 // Data: 14/03/2026
 // ===================================================================
-console.log('🚀 APP.JS v2.51.27 - BUGFIX: Inserir linha na data correta (com filtro de semana)');
+console.log('🚀 APP.JS v2.51.30 - BUGFIX: Empilhar cargas em horários específicos (rowSpan=1)');
 
 // ===================================================================
 // SISTEMA DE SAVE COM DEBOUNCING E QUEUE (Fase 1 - Trabalho Concorrente)
@@ -3667,6 +3667,7 @@ function renderCalendarioSemanal() {
     
     // 🔥 BUGFIX v2.51.2: Filtrar apenas linhas com TRANSP preenchido da semana atual
     const cargas = [];
+    const cargasSemTransp = []; // 🔥 v2.51.29: Rastrear cargas SEM transp
     
     encomendasData.dates.forEach((date, originalIndex) => {
         // Ignorar posições vazias (gaps no array)
@@ -3675,6 +3676,17 @@ function renderCalendarioSemanal() {
         const semana = encomendasData.data[`${originalIndex}_sem`];
         const transp = encomendasData.data[`${originalIndex}_transp`];
         const horario = encomendasData.data[`${originalIndex}_horario_carga`] || '';
+        const cliente = encomendasData.data[`${originalIndex}_cliente`] || '';
+        
+        // 🔥 v2.51.29: Log cargas da semana SEM transp (para debug)
+        if (parseInt(semana) === currentCalendarioWeek && (!transp || transp.trim() === '')) {
+            cargasSemTransp.push({
+                date: date,
+                cliente: cliente,
+                horario: horario,
+                index: originalIndex
+            });
+        }
         
         // Filtrar por semana e TRANSP preenchido
         if (parseInt(semana) !== currentCalendarioWeek || !transp || transp.trim() === '') {
@@ -3684,7 +3696,7 @@ function renderCalendarioSemanal() {
         cargas.push({
             date: date,
             index: originalIndex,  // Índice original (não posição no array filtrado)
-            cliente: encomendasData.data[`${originalIndex}_cliente`] || '',
+            cliente: cliente,
             local: encomendasData.data[`${originalIndex}_local`] || '',
             medida: encomendasData.data[`${originalIndex}_medida`] || '',
             qtd: encomendasData.data[`${originalIndex}_qtd`] || '',
@@ -3700,6 +3712,16 @@ function renderCalendarioSemanal() {
     console.log(`   Total de dates no array: ${encomendasData.dates.length}`);
     console.log(`   Dates não vazias: ${encomendasData.dates.filter(d => d && d.trim() !== '').length}`);
     console.log(`   ✅ Cargas filtradas com TRANSP: ${cargas.length}`);
+    console.log(`   ⚠️ Cargas SEM TRANSP (não aparecem): ${cargasSemTransp.length}`);
+    
+    // 🔥 v2.51.29: Mostrar cargas sem transp para debug
+    if (cargasSemTransp.length > 0) {
+        console.warn('\n   ⚠️ ATENÇÃO: Cargas sem TRANSP preenchido (NÃO APARECEM no Mapa):');
+        cargasSemTransp.forEach((c, i) => {
+            console.warn(`      ${i+1}. ${c.date} - ${c.cliente} - Horário: "${c.horario}"`);
+        });
+        console.warn('\n   💡 SOLUÇÃO: Preencher campo TRANSP no Mapa de Encomendas para estas cargas aparecerem!\n');
+    }
     
     if (cargas.length > 0) {
         console.log(`\n   📦 Cargas que VÃO SER RENDERIZADAS:`);
@@ -3837,47 +3859,48 @@ function renderCalendarioSemanal() {
     // 🔥 v2.51.6: Agrupar cargas por dia e calcular row-span
     const cargasPorDia = {};
     
-    // 🔍 DEBUG: Log TODAS as cargas do dia 04/03 ANTES de processar
-    console.log('\n🔍🔍🔍 DEBUG PRÉ-PROCESSAMENTO: Cargas do dia 04/03 🔍🔍🔍');
-    const cargasDia04 = cargas.filter(c => normalizeDateFormat(c.date) === '04/03');
-    console.log(`   Total de cargas no dia 04/03: ${cargasDia04.length}`);
-    cargasDia04.forEach((c, idx) => {
-        console.log(`\n   [${idx}] Cliente: "${c.cliente}"`);
-        console.log(`       Horário RAW (antes de normalizar): "${c.horario}"`);
-        console.log(`       Data: "${c.date}"`);
-    });
-    console.log('\n');
+    // 🔥 v2.51.28: Debug simplificado (remover logs excessivos)
+    console.log(`\n📊 Processando ${cargas.length} cargas para renderização`);
     
     weekDates.forEach(d => {
-        cargasPorDia[d.dateStr] = cargas
-            .filter(c => normalizeDateFormat(c.date) === d.dateStr)
-            .map(c => {
+        const cargasDesteDia = cargas.filter(c => normalizeDateFormat(c.date) === d.dateStr);
+        
+        if (cargasDesteDia.length > 0) {
+            console.log(`\n📅 ${d.dateStr} (${d.dayName}): ${cargasDesteDia.length} carga(s)`);
+            cargasDesteDia.forEach((c, i) => {
+                console.log(`   ${i+1}. ${c.cliente} - Horário: "${c.horario}"`);
+            });
+        }
+        
+        cargasPorDia[d.dateStr] = cargasDesteDia.map(c => {
                 // Calcular quantos slots este horário deve ocupar
                 let slots = [];
                 let rowSpan = 1;
                 
-                // 🔥 Normalizar horário: remover espaços extras e usar formato padrão
+                // 🔥 v2.51.28: Normalização AGRESSIVA de horário (garantir agrupamento correto)
                 const horarioNormalizado = c.horario 
-                    ? c.horario.trim().replace(/\s+/g, ' ')  // Múltiplos espaços → 1 espaço
+                    ? c.horario
+                        .trim()                      // Remover espaços início/fim
+                        .replace(/\s+/g, ' ')        // Múltiplos espaços → 1 espaço
+                        .replace(/\s*-\s*/g, ' - ')  // Padronizar traço com espaços: "08:00-10:00" → "08:00 - 10:00"
+                        .toUpperCase()               // Normalizar capitalização (MANHÃ/Manhã/manhã → MANHÃ)
                     : '';
                 
                 if (!horarioNormalizado || horarioNormalizado === '') {
                     // Sem horário: linha especial no topo
                     slots = ['SEM_HORARIO'];
                     rowSpan = 1;
-                } else if (horarioNormalizado === 'Manhã') {
+                } else if (horarioNormalizado === 'MANHÃ' || horarioNormalizado === 'MANHA') {
                     // Manhã: 06-12 (3 slots)
                     slots = ['06:00 - 08:00'];
                     rowSpan = 3;
-                } else if (horarioNormalizado === 'Tarde') {
+                } else if (horarioNormalizado === 'TARDE') {
                     // Tarde: 12-20 (4 slots)
                     slots = ['12:00 - 14:00'];
                     rowSpan = 4;
                 } else {
-                    // Horário específico: normalizar formato
-                    // Aceita "08:00-10:00" ou "08:00 - 10:00" → sempre usar " - " (com espaços)
-                    const horarioComEspacos = horarioNormalizado.replace(/\s*-\s*/, ' - ');
-                    slots = [horarioComEspacos];
+                    // Horário específico: já normalizado acima
+                    slots = [horarioNormalizado];
                     rowSpan = 1;
                 }
                 
@@ -3924,28 +3947,12 @@ function renderCalendarioSemanal() {
             const cargasNesteDia = cargasPorDia[d.dateStr] || [];
             const cargasNesteSlot = cargasNesteDia.filter(c => c.slots.includes(slot));
             
-            // 🔍 DEBUG: Log DETALHADO para TODOS os slots (ANTES de verificar células ocupadas!)
-            if (slot !== 'SEM_HORARIO' && cargasNesteDia.length > 0) {
-                console.log(`\n🔍 DEBUG Slot "${slot}" no dia ${d.dateStr}:`);
-                console.log(`   Total cargas no dia: ${cargasNesteDia.length}`);
-                cargasNesteDia.forEach((c, idx) => {
-                    console.log(`\n   [${idx}] Cliente: "${c.cliente}"`);
-                    console.log(`       Horário original: "${c.horario}"`);
-                    console.log(`       Horário normalizado: "${c.horario}"`);
-                    console.log(`       Slots calculados: [${c.slots.join(', ')}]`);
-                    console.log(`       RowSpan: ${c.rowSpan}`);
-                    console.log(`       Match com "${slot}"? ${c.slots.includes(slot)}`);
-                    
-                    // Comparação byte-a-byte
-                    if (c.slots.length > 0 && c.slots[0]) {
-                        const slotCarga = c.slots[0];
-                        console.log(`       Comparação byte-a-byte:`);
-                        console.log(`          Slot esperado: "${slot}" [${Array.from(slot).map(ch => ch.charCodeAt(0)).join(',')}]`);
-                        console.log(`          Slot da carga: "${slotCarga}" [${Array.from(slotCarga).map(ch => ch.charCodeAt(0)).join(',')}]`);
-                        console.log(`          Iguais? ${slot === slotCarga}`);
-                    }
+            // 🔥 v2.51.28: Log apenas quando há múltiplas cargas no mesmo slot
+            if (cargasNesteSlot.length > 1) {
+                console.log(`📦 ${cargasNesteSlot.length} cargas no slot "${slot}" do dia ${d.dateStr}:`);
+                cargasNesteSlot.forEach((c, idx) => {
+                    console.log(`   [${idx+1}] ${c.cliente} - ${c.horario}`);
                 });
-                console.log(`   Cargas que matcham este slot: ${cargasNesteSlot.length}`);
             }
             
             // 🔥 BUGFIX v2.51.14: Se célula ocupada, ocultar MAS permitir renderização de novas cargas
@@ -3985,8 +3992,11 @@ function renderCalendarioSemanal() {
                 const event = document.createElement('div');
                 event.className = 'calendario-event';
                 
-                // 🔥 v2.51.19: Position absolute para blocos expandidos + empilhamento horizontal uniforme
+                // 🔥 v2.51.30: Empilhamento horizontal para TODAS as cargas (rowSpan > 1 ou não)
+                const totalCargasNesteSlot = cargasNesteSlot.length;
+                
                 if (carga.rowSpan > 1) {
+                    // Blocos expandidos (Manhã/Tarde): position absolute
                     event.classList.add('expanded');
                     
                     // 🔥 v2.51.20: Calcular altura total (cada célula = 100px + 2px border = 102px)
@@ -3995,9 +4005,7 @@ function renderCalendarioSemanal() {
                     event.style.top = '0';
                     event.style.zIndex = '5';
                     
-                    // 🔥 TODAS as cargas têm largura uniforme (não só as > 0)
-                    const totalCargasNesteSlot = cargasNesteSlot.length;
-                    
+                    // Empilhamento horizontal
                     if (totalCargasNesteSlot === 1) {
                         // Apenas 1 carga: ocupar toda a largura
                         event.style.left = '8px';
@@ -4011,6 +4019,17 @@ function renderCalendarioSemanal() {
                         event.style.right = 'auto';
                         event.style.width = `${larguraPorBloco}%`;
                     }
+                } else if (totalCargasNesteSlot > 1) {
+                    // 🔥 v2.51.30: Horários específicos (rowSpan = 1) com múltiplas cargas
+                    // Usar flexbox inline para empilhar horizontalmente
+                    event.style.display = 'inline-block';
+                    event.style.verticalAlign = 'top';
+                    event.style.marginRight = '4px';
+                    
+                    // Calcular largura (distribuir espaço)
+                    const larguraPorBloco = Math.floor((100 / totalCargasNesteSlot) - 1); // -1% para gaps
+                    event.style.width = `${larguraPorBloco}%`;
+                    event.style.minWidth = '120px'; // Largura mínima para legibilidade
                 } else if (celulaOcupadaPorExpandido) {
                     // Carga específica sobre célula ocupada → z-index maior
                     event.style.position = 'relative';
