@@ -1955,6 +1955,8 @@
             position: relative;
             vertical-align: top;
             box-sizing: border-box;
+            white-space: nowrap; /* 🔥 v2.51.30: Permitir inline-block lado a lado */
+            overflow-x: auto; /* 🔥 Scroll horizontal se necessário */
         }
         
         .calendario-day-cell:hover {
@@ -1976,6 +1978,8 @@
             flex-direction: column;
             justify-content: flex-start;
             flex-shrink: 0; /* 🔥 Evitar compressão quando empilhado */
+            white-space: normal; /* 🔥 v2.51.30: Permitir quebra de linha dentro do bloco */
+            vertical-align: top; /* 🔥 Alinhamento quando inline-block */
         }
         
         .calendario-event:hover {
