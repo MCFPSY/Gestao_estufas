@@ -1,9 +1,9 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.26 - Sticky Estufa + Mobile TODAS as estufas (layout vertical)
+// Versão: v2.51.27 - BUGFIX: Inserir/apagar linhas com filtro de semana ativo
 // Data: 14/03/2026
 // ===================================================================
-console.log('🚀 APP.JS v2.51.26 - Coluna Estufa fixa + Mobile mostra TODAS as 7 estufas (vertical)');
+console.log('🚀 APP.JS v2.51.27 - BUGFIX: Inserir linha na data correta (com filtro de semana)');
 
 // ===================================================================
 // SISTEMA DE SAVE COM DEBOUNCING E QUEUE (Fase 1 - Trabalho Concorrente)
@@ -1589,6 +1589,9 @@ let encomendasData = {
     data: {}  // {date_field: value}
 };
 
+// 🔥 v2.51.27: Mapeamento de índices (visual -> real) para suportar filtros de semana
+let encomendasIndexMapping = [];
+
 const monthNames = {
     'jan': 'Janeiro', 'fev': 'Fevereiro', 'mar': 'Março',
     'abr': 'Abril', 'mai': 'Maio', 'jun': 'Junho',
@@ -2123,8 +2126,8 @@ function renderEncomendasGrid() {
         let datesToRender = encomendasData.dates;
         let dataToRender = encomendasData.data;
         
-        // Mapeamento index filtrado -> index original
-        let indexMapping = [];
+        // 🔥 v2.51.27: Resetar mapeamento global
+        encomendasIndexMapping = [];
         
         if (currentWeek !== null) {
             console.log(`📊 Filtrando dados pela semana ${currentWeek}`);
@@ -2138,7 +2141,7 @@ function renderEncomendasGrid() {
                 if (weekNum === currentWeek) {
                     const newIndex = filtered.length;
                     filtered.push(date);
-                    indexMapping.push(originalIndex);  // Guardar mapeamento
+                    encomendasIndexMapping.push(originalIndex);  // 🔥 Guardar no array global
                     
                     // Copiar dados desta linha
                     encomendasData.fields.forEach(field => {
@@ -2157,7 +2160,7 @@ function renderEncomendasGrid() {
             console.log(`   ✅ Filtrado: ${datesToRender.length} linhas da semana ${currentWeek}`);
         } else {
             // Sem filtro: mapeamento 1:1
-            indexMapping = datesToRender.map((_, i) => i);
+            encomendasIndexMapping = datesToRender.map((_, i) => i);
         }
         
         console.log(`📊 Renderizando grid:`, {
@@ -2287,8 +2290,8 @@ function renderEncomendasGrid() {
         dateTh.appendChild(dateSpan);
         tr.appendChild(dateTh);
         
-        // 🔥 BUGFIX v2.51.2: Obter o índice ORIGINAL antes de tudo
-        const originalIndex = indexMapping[index] || index;
+        // 🔥 BUGFIX v2.51.2 + v2.51.27: Obter o índice ORIGINAL antes de tudo
+        const originalIndex = encomendasIndexMapping[index] || index;
         
         // Calcular semana automaticamente para a primeira célula (SEM)
         const weekNumber = getWeekNumberFromDateStr(date);
@@ -3487,18 +3490,20 @@ async function changeMonth(newMonth) {
 // Apagar linha específica
 // Inserir nova linha logo abaixo da linha especificada
 async function insertRowBelow(index) {
-    const currentDate = encomendasData.dates[index];
+    // 🔥 v2.51.27: Converter índice visual para índice real
+    const realIndex = encomendasIndexMapping[index] || index;
+    const currentDate = encomendasData.dates[realIndex];
     
-    console.log(`➕ Inserindo nova linha abaixo de ${currentDate} (índice ${index})`);
+    console.log(`➕ Inserindo nova linha abaixo de ${currentDate} (índice visual: ${index}, real: ${realIndex})`);
     
-    // 1. Inserir nova data no array (na posição index + 1)
-    encomendasData.dates.splice(index + 1, 0, currentDate);
+    // 1. Inserir nova data no array (na posição realIndex + 1)
+    encomendasData.dates.splice(realIndex + 1, 0, currentDate);
     
     // 2. Reconstruir o objeto data deslocando todos os índices após a inserção
     const newData = {};
     
-    // Copiar dados antes da inserção (índices 0 até index)
-    for (let i = 0; i <= index; i++) {
+    // Copiar dados antes da inserção (índices 0 até realIndex)
+    for (let i = 0; i <= realIndex; i++) {
         encomendasData.fields.forEach(field => {
             const key = `${i}_${field.key}`;
             if (encomendasData.data[key] !== undefined) {
@@ -3507,12 +3512,12 @@ async function insertRowBelow(index) {
         });
     }
     
-    // Linha inserida (index + 1) fica vazia, exceto o campo SEM (semana)
+    // Linha inserida (realIndex + 1) fica vazia, exceto o campo SEM (semana)
     const weekNum = getWeekNumberFromDateStr(currentDate);
-    newData[`${index + 1}_sem`] = weekNum.toString();
+    newData[`${realIndex + 1}_sem`] = weekNum.toString();
     
     // Copiar dados depois da inserção (deslocar índices +1)
-    for (let i = index + 1; i < encomendasData.dates.length - 1; i++) {
+    for (let i = realIndex + 1; i < encomendasData.dates.length - 1; i++) {
         encomendasData.fields.forEach(field => {
             const oldKey = `${i}_${field.key}`;
             const newKey = `${i + 1}_${field.key}`;
@@ -3531,9 +3536,9 @@ async function insertRowBelow(index) {
     await saveAllRows();
     
     // 5. Histórico
-    logHistory('INSERT', { date: currentDate, row_order: index + 1 });
+    logHistory('INSERT', { date: currentDate, row_order: realIndex + 1 });
     
-    showToast(`✅ Nova linha inserida em ${currentDate}`, 'success');
+    showToast(`✅ Nova linha inserida abaixo de ${currentDate}`, 'success');
 }
 
 async function deleteRow(index) {
@@ -3542,17 +3547,19 @@ async function deleteRow(index) {
         return;
     }
     
-    const date = encomendasData.dates[index];
+    // 🔥 v2.51.27: Converter índice visual para índice real
+    const realIndex = encomendasIndexMapping[index] || index;
+    const date = encomendasData.dates[realIndex];
     
     if (confirm(`Apagar linha ${date}?`)) {
         // Remover a data do array
-        encomendasData.dates.splice(index, 1);
+        encomendasData.dates.splice(realIndex, 1);
         
         // Reconstruir o objeto data com novos índices
         const newData = {};
         encomendasData.dates.forEach((d, newIndex) => {
             encomendasData.fields.forEach(field => {
-                const oldKey = `${newIndex >= index ? newIndex + 1 : newIndex}_${field.key}`;
+                const oldKey = `${newIndex >= realIndex ? newIndex + 1 : newIndex}_${field.key}`;
                 const newKey = `${newIndex}_${field.key}`;
                 if (encomendasData.data[oldKey]) {
                     newData[newKey] = encomendasData.data[oldKey];
@@ -3562,7 +3569,7 @@ async function deleteRow(index) {
         
         encomendasData.data = newData;
         
-        logHistory('DELETE', { date: date, row_order: index });
+        logHistory('DELETE', { date: date, row_order: realIndex });
         renderEncomendasGrid();
         
         // Salvar todas as linhas (necessário porque reindexamos)
