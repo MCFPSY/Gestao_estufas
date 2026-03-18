@@ -1,9 +1,9 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.30 - BUGFIX: Empilhamento horizontal para horários específicos
-// Data: 14/03/2026
+// Versão: v2.51.33e - HOTFIX: Células 60px + Footer 36px + Fonte 17px (perfeito)
+// Data: 18/03/2026
 // ===================================================================
-console.log('🚀 APP.JS v2.51.30 - BUGFIX: Empilhar cargas em horários específicos (rowSpan=1)');
+console.log('🚀 APP.JS v2.51.33 - Matriz: altura -40%, fonte 2x, footer 2 cols, Gantt fix');
 
 // ===================================================================
 // SISTEMA DE SAVE COM DEBOUNCING E QUEUE (Fase 1 - Trabalho Concorrente)
@@ -604,7 +604,12 @@ function renderGantt() {
                 block.style.background = ESTUFA_COLORS[estufaId - 1];
                 block.style.position = 'absolute';
                 block.style.left = `${startOffsetPct}%`;
-                block.style.width = `calc(${widthPct}% - 16px)`; // -16px para margin
+                // 🔥 v2.51.33: Ajustar largura para blocos terminarem exatamente no fim
+                // Remover subtração fixa, usar padding interno
+                block.style.width = `${widthPct}%`;
+                block.style.paddingLeft = '8px';
+                block.style.paddingRight = '8px';
+                block.style.boxSizing = 'border-box';
                 
                 // ⚠️ Detectar conflitos e marcar visualmente
                 const conflicts = detectConflicts(estufaId, secStartDate, secEndDate, sec.id);
@@ -806,7 +811,10 @@ function initMatrixSystem() {
     console.log('🔧 INIT MATRIX SYSTEM!');
     const cells = document.querySelectorAll('.matrix-cell');
     console.log('   Células encontradas:', cells.length);
-    const footer = document.getElementById('cargo-footer');
+    // 🔥 v2.51.33: Footer dividido em 2 células
+    const footer1 = document.getElementById('cargo-footer-1');
+    const footer2 = document.getElementById('cargo-footer-2');
+    const footers = [footer1, footer2].filter(f => f); // Remover nulls
     
     cells.forEach(cell => {
         cell.addEventListener('click', (e) => {
@@ -833,15 +841,32 @@ function initMatrixSystem() {
         });
     });
     
-    // Footer click handler
-    if (footer) {
-        footer.addEventListener('click', () => {
-            cells.forEach(c => c.classList.remove('selected'));
-            selectedCells = ['footer'];
-            footer.classList.add('selected');
+    // 🔥 v2.51.33: Footer click handlers (2 células)
+    footers.forEach(footer => {
+        footer.addEventListener('click', (e) => {
+            const cellId = footer.getAttribute('data-cell');
+            console.log('🖱️ FOOTER CLICADO:', cellId, 'Ctrl:', e.ctrlKey);
+            
+            // Multi-seleção com Ctrl/Cmd
+            if (e.ctrlKey || e.metaKey) {
+                if (selectedCells.includes(cellId)) {
+                    selectedCells = selectedCells.filter(id => id !== cellId);
+                    footer.classList.remove('selected');
+                } else {
+                    selectedCells.push(cellId);
+                    footer.classList.add('selected');
+                }
+            } else {
+                // Seleção única
+                cells.forEach(c => c.classList.remove('selected'));
+                footers.forEach(f => f.classList.remove('selected'));
+                selectedCells = [cellId];
+                footer.classList.add('selected');
+            }
+            
             updateSelectionLabel();
         });
-    }
+    });
 }
 
 function updateSelectionLabel() {
@@ -849,8 +874,9 @@ function updateSelectionLabel() {
     if (selectedCells.length === 0) {
         label.textContent = 'Selecione células (Ctrl+clique para múltipla seleção)';
         label.style.color = '#86868B';
-    } else if (selectedCells.includes('footer')) {
-        label.textContent = 'Linha footer selecionada';
+    } else if (selectedCells.some(id => id.startsWith('footer'))) {
+        // 🔥 v2.51.33: Suportar footer-1 e footer-2
+        label.textContent = 'Célula(s) footer selecionada(s)';
         label.style.color = '#007AFF';
     } else {
         label.textContent = `${selectedCells.length} célula(s) selecionada(s) - Serão mescladas visualmente`;
@@ -899,13 +925,18 @@ function fillSelectedCells() {
         return;
     }
     
-    // Footer handling
-    if (selectedCells.includes('footer')) {
-        const footer = document.getElementById('cargo-footer');
-        footer.classList.remove('selected');
-        footer.classList.add('filled');
-        footer.textContent = tipo;
-        matrixData['footer'] = { tipo, isFooter: true };
+    // 🔥 v2.51.33: Footer handling (suportar footer-1 e footer-2)
+    const footerCells = selectedCells.filter(id => id.startsWith('footer'));
+    if (footerCells.length > 0) {
+        footerCells.forEach(cellId => {
+            const footer = document.getElementById(`cargo-${cellId}`);
+            if (footer) {
+                footer.classList.remove('selected');
+                footer.classList.add('filled');
+                footer.textContent = tipo;
+                matrixData[cellId] = { tipo, isFooter: true };
+            }
+        });
         selectedCells = [];
         updateSelectionLabel();
         document.getElementById('cargo-tipo').value = '';
@@ -928,8 +959,8 @@ function fillSelectedCells() {
             // Aplicar cor de fundo do bloco
             cell.style.backgroundColor = blockColor;
             
-            // Adicionar texto
-            cell.innerHTML = `<div class="cell-tipo">${tipo}</div>`;
+            // Adicionar texto com estilo inline para garantir tamanho
+            cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>`;
             
             // Armazenar dados com informações do bloco
             matrixData[cellId] = { 
@@ -989,6 +1020,7 @@ function fillSelectedCells() {
                         pointer-events: none;
                         z-index: 100;
                         color: white;
+                        font-size: 17px;
                         font-weight: 700;
                     ">${tipo}</div>`;
                     console.log(`   ✅ ${cellId}: filled + merged-cell (COM TEXTO CENTRALIZADO ${rowSpan}×${colSpan})`);
@@ -1079,7 +1111,7 @@ function fillSelectedCells() {
         const cell = document.querySelector(`[data-cell="${cellId}"]`);
         cell.classList.remove('selected');
         cell.classList.add('filled');
-        cell.innerHTML = `<div class="cell-tipo">${tipo}</div>`;
+        cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>`;
     }
     
     selectedCells = [];
@@ -1139,12 +1171,17 @@ function clearSelectedCells() {
         return;
     }
     
-    // Footer handling
-    if (selectedCells.includes('footer')) {
-        const footer = document.getElementById('cargo-footer');
-        footer.classList.remove('selected', 'filled');
-        footer.textContent = '';
-        delete matrixData['footer'];
+    // 🔥 v2.51.33: Footer handling (suportar footer-1 e footer-2)
+    const footerCells = selectedCells.filter(id => id.startsWith('footer'));
+    if (footerCells.length > 0) {
+        footerCells.forEach(cellId => {
+            const footer = document.getElementById(`cargo-${cellId}`);
+            if (footer) {
+                footer.classList.remove('selected', 'filled');
+                footer.textContent = '';
+                delete matrixData[cellId];
+            }
+        });
         selectedCells = [];
         updateSelectionLabel();
         showToast('Footer limpo', 'success');
@@ -1211,11 +1248,15 @@ function loadMatrixData(cargoArray) {
         cell.innerHTML = '';
     });
     
-    const footer = document.getElementById('cargo-footer');
-    if (footer) {
-        footer.classList.remove('filled', 'selected');
-        footer.textContent = '';
-    }
+    // 🔥 v2.51.33: Limpar ambas células do footer
+    const footer1 = document.getElementById('cargo-footer-1');
+    const footer2 = document.getElementById('cargo-footer-2');
+    [footer1, footer2].forEach(footer => {
+        if (footer) {
+            footer.classList.remove('filled', 'selected');
+            footer.textContent = '';
+        }
+    });
     
     // Carregar dados
     if (cargoArray && cargoArray.length > 0) {
@@ -1226,12 +1267,14 @@ function loadMatrixData(cargoArray) {
             const tipo = item.tipo_palete;
             const blockColor = getNextBlockColor(); // 🎯 Gerar cor automaticamente (block_color não existe na BD)
             
-            // Footer handling
-            if (posicao === 'footer') {
+            // 🔥 v2.51.33: Footer handling (suportar footer, footer-1, footer-2)
+            if (posicao.startsWith('footer')) {
+                const footerId = posicao === 'footer' ? 'footer-1' : posicao; // Compatibilidade: 'footer' → 'footer-1'
+                const footer = document.getElementById(`cargo-${footerId}`);
                 if (footer) {
                     footer.classList.add('filled');
                     footer.textContent = tipo;
-                    matrixData['footer'] = { tipo, isFooter: true };
+                    matrixData[footerId] = { tipo, isFooter: true };
                 }
                 return;
             }
@@ -1245,7 +1288,7 @@ function loadMatrixData(cargoArray) {
                 if (cell) {
                     cell.classList.add('filled');
                     cell.style.backgroundColor = blockColor; // Aplicar cor
-                    cell.innerHTML = `<div class="cell-tipo">${tipo}</div>`;
+                    cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>`;
                     
                     matrixData[cellId] = {
                         tipo,
