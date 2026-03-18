@@ -6,9 +6,11 @@
     <meta name="theme-color" content="#007AFF">
     <title>PSY - Gestão de secagens, encomendas e cargas</title>
     
-    <!-- PWA Icons -->
-    <link rel="icon" type="image/png" href="https://mcfpsy.github.io/Gestao_estufas/logo.png">
-    <link rel="apple-touch-icon" href="https://mcfpsy.github.io/Gestao_estufas/logo.png">
+    <!-- PWA Icons - v2.51.33e: Múltiplos formatos para compatibilidade -->
+    <link rel="icon" type="image/png" sizes="32x32" href="https://mcfpsy.github.io/Gestao_estufas/logo.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="https://mcfpsy.github.io/Gestao_estufas/logo.png">
+    <link rel="shortcut icon" href="https://mcfpsy.github.io/Gestao_estufas/logo.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="https://mcfpsy.github.io/Gestao_estufas/logo.png">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="PSY">
@@ -1180,8 +1182,7 @@
         }
         
         .matrix-cell {
-            aspect-ratio: 2 / 1; /* Retângulo horizontal (largura = 2x altura) */
-            min-height: 50px;
+            height: 60px; /* 🔥 v2.51.33b: Altura 60px (dobro de 30px) */
             background: #F5F5F7;
             border: 2px solid #E5E5EA;
             border-radius: 8px;
@@ -1192,7 +1193,8 @@
             align-items: center;
             justify-content: center;
             padding: 8px;
-            font-size: 11px;
+            font-size: 17px; /* 🔥 v2.51.33e: Ajustado para 17px (equilíbrio perfeito) */
+            font-weight: 700; /* 🔥 v2.51.33: Negrito para melhor legibilidade */
             text-align: center;
             position: relative;
             overflow: visible;
@@ -1209,100 +1211,40 @@
         /* Remover bordas internas entre células mescladas */
         /* (Aplicadas dinamicamente via JavaScript) */
         
-        .matrix-cell.filled .cell-tipo {
+        .matrix-cell .cell-tipo {
             font-weight: 700;
-            font-size: 11px;
+            font-size: 17px; /* 🔥 v2.51.33e: Ajustado para 17px (equilíbrio perfeito) */
             white-space: pre-wrap;
-            line-height: 1.4;
+            line-height: 1.2;
             word-break: break-word;
+            color: #1D1D1F;
         }
         
-        /* Linhas picotadas horizontais entre cada 2 linhas (após linhas 1, 3, 5) */
-        /* Coloca ::after na coluna direita (col="2") para cobrir toda a largura */
-        /* Linhas pontilhadas horizontais - nas células da coluna direita */
-        .matrix-cell[data-row="1"][data-col="2"]::after {
-            content: '';
-            position: absolute;
-            bottom: -4px;
-            left: -100%;
-            width: calc(200% + 8px);
-            height: 2px;
-            background: repeating-linear-gradient(
-                90deg,
-                #999 0,
-                #999 8px,
-                transparent 8px,
-                transparent 16px
-            );
-            pointer-events: none;
-            z-index: 10;
+        .matrix-cell.filled .cell-tipo {
+            color: #FFFFFF; /* Texto branco quando célula preenchida */
         }
         
-        .matrix-cell[data-row="3"][data-col="2"]::after {
-            content: '';
-            position: absolute;
-            bottom: -4px;
-            left: -100%;
-            width: calc(200% + 8px);
-            height: 2px;
-            background: repeating-linear-gradient(
-                90deg,
-                #999 0,
-                #999 8px,
-                transparent 8px,
-                transparent 16px
-            );
-            pointer-events: none;
-            z-index: 10;
-        }
+        /* 🔥 v2.51.32: Separadores picotados removidos (não são mais necessários) */
         
-        .matrix-cell[data-row="5"][data-col="2"]::after {
-            content: '';
-            position: absolute;
-            bottom: -4px;
-            left: -100%;
-            width: calc(200% + 8px);
-            height: 2px;
-            background: repeating-linear-gradient(
-                90deg,
-                #999 0,
-                #999 8px,
-                transparent 8px,
-                transparent 16px
-            );
-            pointer-events: none;
-            z-index: 10;
-        }
-        
-        .matrix-cell[data-row="7"][data-col="2"]::after {
-            content: '';
-            position: absolute;
-            bottom: -4px;
-            left: -100%;
-            width: calc(200% + 8px);
-            height: 2px;
-            background: repeating-linear-gradient(
-                90deg,
-                #999 0,
-                #999 8px,
-                transparent 8px,
-                transparent 16px
-            );
-            pointer-events: none;
-            z-index: 10;
+        /* 🔥 v2.51.33: Container para 2 colunas do footer */
+        .matrix-footer-container {
+            margin-top: 8px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
         }
         
         .matrix-footer {
-            margin-top: 8px;
             background: #F5F5F7;
             border: 2px solid #E5E5EA;
             border-radius: 8px;
-            min-height: 36px;
+            height: 36px; /* 🔥 v2.51.33d: Altura original 36px (5ª linha separada) */
             display: flex;
             align-items: center;
             justify-content: center;
             padding: 4px 12px;
-            font-size: 11px;
+            font-size: 17px; /* 🔥 v2.51.33e: Ajustado para 17px (equilíbrio perfeito) */
+            font-weight: 700; /* 🔥 v2.51.33: Negrito para melhor legibilidade */
             color: #666;
             cursor: pointer;
             transition: all 0.2s;
@@ -2371,7 +2313,7 @@
                         </div>
                         
                         <div class="cargo-matrix-container">
-                            <!-- Matriz 2x8 (16 células: 2 colunas × 8 linhas) -->
+                            <!-- Matriz 2x4 (8 células: 2 colunas × 4 linhas) -->
                             <div class="matrix-grid" id="cargo-matrix-grid">
                                 <!-- Coluna Esquerda | Coluna Direita -->
                                 <div class="matrix-cell" data-cell="1-1" data-row="1" data-col="1"></div>
@@ -2385,22 +2327,13 @@
                                 
                                 <div class="matrix-cell" data-cell="4-1" data-row="4" data-col="1"></div>
                                 <div class="matrix-cell" data-cell="4-2" data-row="4" data-col="2"></div>
-                                
-                                <div class="matrix-cell" data-cell="5-1" data-row="5" data-col="1"></div>
-                                <div class="matrix-cell" data-cell="5-2" data-row="5" data-col="2"></div>
-                                
-                                <div class="matrix-cell" data-cell="6-1" data-row="6" data-col="1"></div>
-                                <div class="matrix-cell" data-cell="6-2" data-row="6" data-col="2"></div>
-                                
-                                <div class="matrix-cell" data-cell="7-1" data-row="7" data-col="1"></div>
-                                <div class="matrix-cell" data-cell="7-2" data-row="7" data-col="2"></div>
-                                
-                                <div class="matrix-cell" data-cell="8-1" data-row="8" data-col="1"></div>
-                                <div class="matrix-cell" data-cell="8-2" data-row="8" data-col="2"></div>
                             </div>
                             
-                            <!-- Linha Footer Fina -->
-                            <div class="matrix-footer" id="cargo-footer" data-cell="footer"></div>
+                            <!-- 🔥 v2.51.33: Footer dividido em 2 colunas (como as células principais) -->
+                            <div class="matrix-footer-container">
+                                <div class="matrix-footer" id="cargo-footer-1" data-cell="footer-1"></div>
+                                <div class="matrix-footer" id="cargo-footer-2" data-cell="footer-2"></div>
+                            </div>
                         </div>
                         
                         <!-- Formulário de preenchimento -->
