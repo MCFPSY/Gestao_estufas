@@ -1,6 +1,6 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.33e - HOTFIX: Células 60px + Footer 36px + Fonte 17px (perfeito)
+// Versão: v2.51.34 - PWA: manifest.json + ícone correto no Windows
 // Data: 18/03/2026
 // ===================================================================
 console.log('🚀 APP.JS v2.51.33 - Matriz: altura -40%, fonte 2x, footer 2 cols, Gantt fix');
