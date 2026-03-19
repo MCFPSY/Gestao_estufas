@@ -1622,6 +1622,18 @@
             background: rgba(0, 122, 255, 0.05) !important;
         }
         
+        /* 🔥 v2.51.34c: Célula destacada em amarelo */
+        .excel-cell-highlighted {
+            background: #FFEB3B !important;
+            font-weight: 600 !important;
+        }
+        
+        /* Modo de destaque ativo */
+        .highlight-mode-active {
+            background: #FFEB3B !important;
+            border-color: #FFC107 !important;
+        }
+        
         /* Botão de apagar linha */
         .excel-row-insert {
             position: absolute;
@@ -1901,7 +1913,7 @@
             vertical-align: top;
             box-sizing: border-box;
             white-space: nowrap; /* 🔥 v2.51.30: Permitir inline-block lado a lado */
-            overflow-x: auto; /* 🔥 Scroll horizontal se necessário */
+            overflow: visible; /* 🔥 v2.51.34b: Permitir blocos expandidos ultrapassarem célula */
         }
         
         .calendario-day-cell:hover {
@@ -1932,12 +1944,13 @@
             box-shadow: 0 4px 12px rgba(0, 122, 255, 0.35);
         }
         
-        /* Blocos expandidos (Manhã/Tarde) - v2.51.18: Restaurar position absolute + empilhamento horizontal */
+        /* Blocos expandidos (Manhã/Tarde) - v2.51.34c: Position absolute + overflow visible */
         .calendario-event.expanded {
-            position: absolute;
-            left: 8px;
-            right: 8px;
+            position: absolute !important;
             z-index: 5;
+            top: 0 !important;
+            overflow: visible !important;
+            /* left, right, width e height são definidos pelo JavaScript */
         }
         
         .calendario-event-title {
@@ -2205,6 +2218,9 @@
                         </div>
                     </div>
                     <div class="encomendas-buttons">
+                        <button class="btn-secondary" id="highlight-btn" onclick="toggleHighlightMode()" title="Ativar/Desativar modo de destaque">
+                            🖍️ Destacar Célula
+                        </button>
                         <button class="btn-secondary" id="prepopulate-month-btn" onclick="forcePrePopulateMonth()">🔄 Pré-popular Mês Completo</button>
                         <button class="btn-secondary" id="fullscreen-btn" onclick="toggleFullscreen()">⛶ Ecrã Inteiro</button>
                     </div>
