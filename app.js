@@ -1,6 +1,6 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.34c - PWA + FIX Tarde + Destaque amarelo células
+// Versão: v2.51.35b - Logo RAIZ + Limpar cor + Remove botão + Borda 40%
 // Data: 18/03/2026
 // ===================================================================
 console.log('🚀 APP.JS v2.51.33 - Matriz: altura -40%, fonte 2x, footer 2 cols, Gantt fix');
@@ -1212,6 +1212,7 @@ function clearSelectedCells() {
                     cell.style.removeProperty('margin-left');
                     cell.style.removeProperty('margin-top');
                     cell.style.removeProperty('margin-bottom');
+                    cell.style.removeProperty('background-color'); // 🔥 v2.51.35: Remover cor de fundo
                     cell.innerHTML = '';
                 }
             });
@@ -1222,6 +1223,7 @@ function clearSelectedCells() {
             const cell = document.querySelector(`[data-cell="${cellId}"]`);
             if (cell) {
                 cell.classList.remove('selected', 'filled');
+                cell.style.removeProperty('background-color'); // 🔥 v2.51.35: Remover cor de fundo
                 cell.innerHTML = '';
             }
         }
