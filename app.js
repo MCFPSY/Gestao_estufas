@@ -1,6 +1,6 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.34 - PWA: manifest.json + ícone correto no Windows
+// Versão: v2.51.34c - PWA + FIX Tarde + Destaque amarelo células
 // Data: 18/03/2026
 // ===================================================================
 console.log('🚀 APP.JS v2.51.33 - Matriz: altura -40%, fonte 2x, footer 2 cols, Gantt fix');
@@ -4042,17 +4042,20 @@ function renderCalendarioSemanal() {
                     // Blocos expandidos (Manhã/Tarde): position absolute
                     event.classList.add('expanded');
                     
-                    // 🔥 v2.51.20: Calcular altura total (cada célula = 100px + 2px border = 102px)
+                    // 🔥 v2.51.34c: Calcular altura total (cada célula = 100px + 2px border = 102px)
                     const alturaTotal = (carga.rowSpan * 102) - 10; // -10px para padding
                     event.style.height = `${alturaTotal}px`;
                     event.style.top = '0';
                     event.style.zIndex = '5';
+                    
+                    console.log(`🎯 Bloco expandido: ${carga.cliente} | rowSpan: ${carga.rowSpan} | Altura: ${alturaTotal}px | Slot: ${slot}`);
                     
                     // Empilhamento horizontal
                     if (totalCargasNesteSlot === 1) {
                         // Apenas 1 carga: ocupar toda a largura
                         event.style.left = '8px';
                         event.style.right = '8px';
+                        event.style.width = 'auto'; // 🔥 v2.51.34: Garantir largura automática
                     } else {
                         // Múltiplas cargas: dividir horizontalmente
                         const larguraPorBloco = Math.floor(96 / totalCargasNesteSlot); // 96% dividido (deixar 4% de margem)
@@ -4321,6 +4324,45 @@ document.addEventListener('fullscreenchange', () => {
         // Saiu de fullscreen
         if (btn) btn.textContent = '⛶ Ecrã Inteiro';
         if (container) container.classList.remove('fullscreen-active');
+    }
+});
+
+// 🔥 v2.51.34c: Modo de destaque amarelo para células
+let highlightModeActive = false;
+
+function toggleHighlightMode() {
+    highlightModeActive = !highlightModeActive;
+    const btn = document.getElementById('highlight-btn');
+    
+    if (highlightModeActive) {
+        btn.classList.add('highlight-mode-active');
+        btn.textContent = '🖍️ Modo Ativo (clique nas células)';
+        showToast('🖍️ Modo destaque ATIVO - clique nas células para destacar', 'info');
+    } else {
+        btn.classList.remove('highlight-mode-active');
+        btn.textContent = '🖍️ Destacar Célula';
+        showToast('Modo destaque desativado', 'info');
+    }
+}
+
+// Adicionar listener para células clicáveis
+document.addEventListener('click', function(e) {
+    // Verificar se clicou numa célula editável E modo destaque está ativo
+    if (highlightModeActive && e.target.classList.contains('excel-cell') && e.target.contentEditable === 'true') {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Toggle destaque
+        if (e.target.classList.contains('excel-cell-highlighted')) {
+            e.target.classList.remove('excel-cell-highlighted');
+            console.log('🖍️ Destaque removido da célula');
+        } else {
+            e.target.classList.add('excel-cell-highlighted');
+            console.log('🖍️ Célula destacada em amarelo');
+        }
+        
+        // Salvar estado (opcional - para persistir destaques)
+        // saveHighlightState();
     }
 });
 
