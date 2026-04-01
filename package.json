@@ -1,0 +1,9 @@
+{
+  "name": "gestao-estufas",
+  "version": "1.0.0",
+  "description": "PSY - Gestão de Estufas",
+  "scripts": {
+    "start": "npx serve . -p 3000",
+    "dev": "npx serve . -p 3000 --no-clipboard"
+  }
+}
