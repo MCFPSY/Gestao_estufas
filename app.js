@@ -5529,7 +5529,7 @@ async function renderResumoCargas() {
             if (!cargaWeek) return;
 
             // Só considerar cargas das 3 semanas
-            const weekIndex = cargaWeek - currentWeekNum;
+            const weekIndex = cargaWeek - startWeekNum;
             if (weekIndex < 0 || weekIndex >= 3) {
                 return;
             }
