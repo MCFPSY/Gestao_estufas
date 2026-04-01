@@ -5233,11 +5233,17 @@ window.closePdfImporter = function() {
     }, 300);
 }
 
-function parsePdfText(text) {
-    // Parser para formato Primavera (inline): ECL lines + product lines
-    // Formato: "ECL 2026/167 24/03/2026 C0006 50,000 UN ..." seguido de
-    //          "P080653930140S PAL 800X600 DIV 50,000 UN ..."
-    // Múltiplos ECLs podem preceder um único produto
+function parsePdfText(rawText) {
+    // Parser para formato Primavera — suporta dois formatos:
+    // Formato A: "ECL 2026/167 24/03/2026 C0006 50,000 UN ..." + "P080653930140S PAL ... 50,000 UN"
+    // Formato B: "351.2026/94 07/04/2026 C0446 108,000 VP ..." + "P08121R04010S PAL ... VP"
+    //            (usa font PUA encoding: chars \uf020-\uf07f = ASCII + 0xF000)
+
+    // Decode PUA font encoding (Primavera Identity-H CIDFont)
+    const text = rawText.replace(/[\uf020-\uf0ff]/g, c => {
+        const code = c.charCodeAt(0) - 0xf000;
+        return (code >= 0x20 && code <= 0x7e) ? String.fromCharCode(code) : c;
+    });
 
     console.log('📄 Iniciando parse do PDF PALSYSTEMS...');
     console.log('📄 Texto completo (primeiros 1000 chars):', text.substring(0, 1000));
@@ -5246,9 +5252,9 @@ function parsePdfText(text) {
     let m;
 
     // 1. Mapear código de cliente → nome
-    // Padrão: "C0006 CORK SUPPLY PORTUGAL, S.A." seguido de ECL/Total/outro cliente
+    // Lookahead deteta tanto "ECL " como "NNN.YYYY/" como separador
     const clientMap = {};
-    const clientRegex = /(C\d{4,5})\s+([A-Z][A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s,\.'\-]+?)(?=\s+(?:ECL\s|Total\s|C\d{4}))/g;
+    const clientRegex = /(C\d{4,5})\s+([A-Z][A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s,\.'\-]+?)(?=\s+(?:\d+\.\d{4}\/\d+|ECL\s|Total\s|C\d{4}))/g;
     while ((m = clientRegex.exec(text)) !== null) {
         if (!clientMap[m[1]]) {
             clientMap[m[1]] = m[2].trim();
@@ -5256,10 +5262,11 @@ function parsePdfText(text) {
         }
     }
 
-    // 2. Encontrar todos os ECLs com posição no texto
-    // Formato: "ECL 2026/167 24/03/2026 C0006 50,000 UN ..."
+    // 2. Encontrar todos os documentos de encomenda com posição no texto
+    // Formato A: "ECL 2026/167" | Formato B: "351.2026/94" ou "08.2026/110"
+    // Unidades: UN ou VP
     const eclMatches = [];
-    const eclRegex = /(ECL\s+\d{4}\/\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(C\d+)\s+([\d.]+,\d{3})\s+UN/g;
+    const eclRegex = /(\d+\.\d{4}\/\d+|ECL\s+\d{4}\/\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(C\d+)\s+([\d.]+,\d{3})\s+(?:UN|VP)/g;
     while ((m = eclRegex.exec(text)) !== null) {
         eclMatches.push({
             pos: m.index,
@@ -5270,12 +5277,13 @@ function parsePdfText(text) {
             qtd: parseInt(m[4].replace(/\./g, '').split(',')[0])
         });
     }
-    console.log(`✅ ${eclMatches.length} ECLs encontrados`);
+    console.log(`✅ ${eclMatches.length} documentos encontrados`);
 
     // 3. Encontrar todos os produtos com posição no texto
-    // Formato: "P080653930140S PAL 800X600 DIV 50,000 UN ..."
+    // Formato A: "P080653930140S ..."  | Formato B: "P08121R04010S ...", "P08127R04T-MS ...", "#54111000001406 ..."
+    // Unidades: UN ou VP
     const prodMatches = [];
-    const prodRegex = /(P\d{6,}[A-Z0-9]*)\s+(.+?)\s+([\d.]+,\d{3})\s+UN/g;
+    const prodRegex = /([P#][A-Z0-9#\-]{4,})\s+(.+?)\s+([\d.]+,\d{3})\s+(?:UN|VP)/g;
     while ((m = prodRegex.exec(text)) !== null) {
         prodMatches.push({
             pos: m.index,
@@ -5286,7 +5294,7 @@ function parsePdfText(text) {
     }
     console.log(`✅ ${prodMatches.length} produtos encontrados`);
 
-    // 4. Associar ECLs ao produto seguinte (cada produto "apanha" todos os ECLs entre o produto anterior e ele próprio)
+    // 4. Associar documentos ao produto seguinte
     prodMatches.forEach((prod, pi) => {
         const prevEnd = pi > 0 ? prodMatches[pi - 1].end : 0;
         const relatedEcls = eclMatches.filter(e => e.pos >= prevEnd && e.pos < prod.pos);
