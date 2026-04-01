@@ -2335,11 +2335,30 @@
             <div class="calendario-section">
                 <div class="calendario-toolbar">
                     <div class="calendario-header" style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-                        <div>
-                            <h2>📦 Mapa Cargas — Resumo (3 Semanas)</h2>
-                            <p style="margin: 6px 0 0 0; font-size: 13px; color: #666;">
-                                📊 Visão macro das cargas programadas
-                            </p>
+                        <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
+                            <div>
+                                <h2>📦 Mapa Cargas — Resumo (3 Semanas)</h2>
+                                <p style="margin: 6px 0 0 0; font-size: 13px; color: #666;">
+                                    📊 Visão macro das cargas programadas
+                                </p>
+                            </div>
+                            <div class="month-selector-container" style="margin: 0;">
+                                <label for="resumo-month-selector" style="font-size:13px;color:#666;">Mês:</label>
+                                <select id="resumo-month-selector" onchange="changeMonth(this.value)" style="font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid #D1D1D6;background:white;cursor:pointer;">
+                                    <option value="jan">Janeiro 2026</option>
+                                    <option value="fev">Fevereiro 2026</option>
+                                    <option value="mar">Março 2026</option>
+                                    <option value="abr">Abril 2026</option>
+                                    <option value="mai">Maio 2026</option>
+                                    <option value="jun">Junho 2026</option>
+                                    <option value="jul">Julho 2026</option>
+                                    <option value="ago">Agosto 2026</option>
+                                    <option value="set">Setembro 2026</option>
+                                    <option value="out">Outubro 2026</option>
+                                    <option value="nov">Novembro 2026</option>
+                                    <option value="dez">Dezembro 2026</option>
+                                </select>
+                            </div>
                         </div>
                         <button class="btn-secondary" onclick="renderResumoCargas()">🔄 Atualizar</button>
                     </div>

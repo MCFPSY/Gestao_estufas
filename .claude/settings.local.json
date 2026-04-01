@@ -4,7 +4,12 @@
       "mcp__Claude_Preview__preview_start",
       "Bash(where npx:*)",
       "Bash(where node:*)",
-      "Bash(where python:*)"
+      "Bash(where python:*)",
+      "Bash(python3.exe -c \"print\\(''ok''\\)\")",
+      "Bash(py -3 -c \"print\\(''ok''\\)\")",
+      "Bash(node -e \"console.log\\(''node ok''\\)\")",
+      "Bash(py -3 -c \":*)",
+      "Bash(py -3 -m pip install pdfplumber -q)"
     ]
   }
 }

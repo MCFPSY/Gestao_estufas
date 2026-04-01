@@ -3068,6 +3068,10 @@ async function loadEncomendasData() {
     if (cargasMonthSelector && cargasMonthSelector.value !== currentMonth) {
         cargasMonthSelector.value = currentMonth;
     }
+    const resumoMonthSelector = document.getElementById('resumo-month-selector');
+    if (resumoMonthSelector && resumoMonthSelector.value !== currentMonth) {
+        resumoMonthSelector.value = currentMonth;
+    }
     
     try {
         const { data, error } = await db
@@ -3978,12 +3982,15 @@ async function changeMonth(newMonth) {
     disconnectPresence();
     
     currentMonth = newMonth;
-    // Sincronizar ambos os selectors de mês
+    // Sincronizar todos os selectors de mês
     const monthSel = document.getElementById('month-selector');
     if (monthSel) monthSel.value = newMonth;
     const cargasSel = document.getElementById('cargas-month-selector');
     if (cargasSel) cargasSel.value = newMonth;
+    const resumoSel = document.getElementById('resumo-month-selector');
+    if (resumoSel) resumoSel.value = newMonth;
     await loadEncomendasData();
+    renderResumoCargas();
     
     // Reconectar Realtime e Presença para o novo mês
     setupEncomendasRealtime();
@@ -5227,88 +5234,81 @@ window.closePdfImporter = function() {
 }
 
 function parsePdfText(text) {
-    // 🔥 v2.51.37d: Parser para texto INLINE (tudo numa linha)
-    
+    // Parser para formato Primavera (inline): ECL lines + product lines
+    // Formato: "ECL 2026/167 24/03/2026 C0006 50,000 UN ..." seguido de
+    //          "P080653930140S PAL 800X600 DIV 50,000 UN ..."
+    // Múltiplos ECLs podem preceder um único produto
+
     console.log('📄 Iniciando parse do PDF PALSYSTEMS...');
     console.log('📄 Texto completo (primeiros 1000 chars):', text.substring(0, 1000));
-    
+
     const orders = [];
-    
-    // Regex para encontrar padrões no texto inline
-    // Padrão: C0006 (cliente) ... ECL 2026/167 (doc) ... 24/03/2026 (data) ... P080653930140S PAL 800X600 DIV 50,000 (produto + qtd)
-    
-    // 1. Encontrar todos os clientes: "C0006  CORK SUPPLY PORTUGAL, S.A."
-    const clienteRegex = /(C\d{4,5})\s+([A-Z][A-Z\s,\.]+?)(?=\s+(?:C\d{4,5}|ECL|Total|$))/gi;
-    const clientes = {};
-    let match;
-    
-    while ((match = clienteRegex.exec(text)) !== null) {
-        const codigo = match[1]; // "C0006"
-        const nome = match[2].trim(); // "CORK SUPPLY PORTUGAL, S.A."
-        clientes[codigo] = nome;
-        console.log(`👤 Cliente: ${codigo} → ${nome}`);
-    }
-    
-    // 2. Encontrar todas as encomendas: "C0006 24/03/2026 ECL 2026/167 P080653930140S PAL 800X600 DIV 50,000"
-    // Padrão mais flexível: capturar documento, data, produto e qtd em sequência
-    const encRegex = /(C\d{4,5})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(ECL\s+\d{4}\/\d+)\s+(P\d+[A-Z]*)\s+([A-Z\s\d]+?)\s+(\d{1,5})[,\.](\d{3})/gi;
-    
-    while ((match = encRegex.exec(text)) !== null) {
-        const clienteCod = match[1]; // "C0006"
-        const data = match[2]; // "24/03/2026"
-        const doc = match[3].replace(/\s+/g, ' '); // "ECL 2026/167"
-        const prodCod = match[4]; // "P080653930140S"
-        const medida = match[5].trim(); // "PAL 800X600 DIV"
-        const qtd = parseInt(match[6]); // 50
-        
-        const cliente = clientes[clienteCod] || clienteCod;
-        
-        orders.push({
-            enc: doc,
-            cliente: cliente,
-            data_entrega: data,
-            medida: medida,
-            qtd: qtd
-        });
-        
-        console.log(`✅ Encomenda: ${doc} | ${cliente} | ${data} | ${medida} | ${qtd}`);
-    }
-    
-    // 3. Formato alternativo: sem código de produto
-    // "C0006 24/03/2026 ECL 2026/167 PAL 800X1200 DIV 350,000"
-    if (orders.length === 0) {
-        console.log('⚠️ Tentando formato alternativo (sem código produto)...');
-        const altRegex = /(C\d{4,5})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(ECL\s+\d{4}\/\d+)\s+(PAL|PRANCHA|PALLET|TABULEIRO)\s+([A-Z\s\dX]+?)\s+(\d{1,5})[,\.](\d{3})/gi;
-        
-        while ((match = altRegex.exec(text)) !== null) {
-            const clienteCod = match[1];
-            const data = match[2];
-            const doc = match[3].replace(/\s+/g, ' ');
-            const medida = (match[4] + ' ' + match[5]).trim();
-            const qtd = parseInt(match[6]);
-            
-            const cliente = clientes[clienteCod] || clienteCod;
-            
-            orders.push({
-                enc: doc,
-                cliente: cliente,
-                data_entrega: data,
-                medida: medida,
-                qtd: qtd
-            });
-            
-            console.log(`✅ Encomenda (alt): ${doc} | ${cliente} | ${data} | ${medida} | ${qtd}`);
+    let m;
+
+    // 1. Mapear código de cliente → nome
+    // Padrão: "C0006 CORK SUPPLY PORTUGAL, S.A." seguido de ECL/Total/outro cliente
+    const clientMap = {};
+    const clientRegex = /(C\d{4,5})\s+([A-Z][A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s,\.'\-]+?)(?=\s+(?:ECL\s|Total\s|C\d{4}))/g;
+    while ((m = clientRegex.exec(text)) !== null) {
+        if (!clientMap[m[1]]) {
+            clientMap[m[1]] = m[2].trim();
+            console.log(`👤 Cliente: ${m[1]} → ${clientMap[m[1]]}`);
         }
     }
-    
-    console.log(`✅ Parse completo: ${orders.length} encomendas detectadas`);
-    if (orders.length > 0) {
-        console.log('📊 Primeira encomenda:', orders[0]);
-        console.log('📊 Todas:', orders);
-    } else {
-        console.warn('⚠️ NENHUMA encomenda detectada! Texto pode estar em formato inesperado.');
+
+    // 2. Encontrar todos os ECLs com posição no texto
+    // Formato: "ECL 2026/167 24/03/2026 C0006 50,000 UN ..."
+    const eclMatches = [];
+    const eclRegex = /(ECL\s+\d{4}\/\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(C\d+)\s+([\d.]+,\d{3})\s+UN/g;
+    while ((m = eclRegex.exec(text)) !== null) {
+        eclMatches.push({
+            pos: m.index,
+            end: m.index + m[0].length,
+            doc: m[1].trim().replace(/\s+/g, ' '),
+            date: m[2],
+            clientCode: m[3],
+            qtd: parseInt(m[4].replace(/\./g, '').split(',')[0])
+        });
     }
-    
+    console.log(`✅ ${eclMatches.length} ECLs encontrados`);
+
+    // 3. Encontrar todos os produtos com posição no texto
+    // Formato: "P080653930140S PAL 800X600 DIV 50,000 UN ..."
+    const prodMatches = [];
+    const prodRegex = /(P\d{6,}[A-Z0-9]*)\s+(.+?)\s+([\d.]+,\d{3})\s+UN/g;
+    while ((m = prodRegex.exec(text)) !== null) {
+        prodMatches.push({
+            pos: m.index,
+            end: m.index + m[0].length,
+            code: m[1],
+            desc: m[2].trim()
+        });
+    }
+    console.log(`✅ ${prodMatches.length} produtos encontrados`);
+
+    // 4. Associar ECLs ao produto seguinte (cada produto "apanha" todos os ECLs entre o produto anterior e ele próprio)
+    prodMatches.forEach((prod, pi) => {
+        const prevEnd = pi > 0 ? prodMatches[pi - 1].end : 0;
+        const relatedEcls = eclMatches.filter(e => e.pos >= prevEnd && e.pos < prod.pos);
+
+        relatedEcls.forEach(ecl => {
+            const cliente = clientMap[ecl.clientCode] || ecl.clientCode;
+            orders.push({
+                enc: ecl.doc,
+                cliente: cliente,
+                data_entrega: ecl.date,
+                medida: prod.desc,
+                qtd: ecl.qtd
+            });
+            console.log(`✅ ${ecl.doc} | ${cliente} | ${ecl.date} | ${prod.desc} | ${ecl.qtd}`);
+        });
+    });
+
+    console.log(`✅ Parse completo: ${orders.length} encomendas detectadas`);
+    if (orders.length === 0) {
+        console.warn('⚠️ NENHUMA encomenda detectada! Verifique o formato do PDF.');
+    }
+
     return orders;
 }
 
@@ -5483,18 +5483,20 @@ async function renderResumoCargas() {
         console.log(`✅ ${cargas.length} cargas com transporte preenchido`);
         console.log('📊 Primeiras 3 cargas:', cargas.slice(0, 3));
         
-        // Obter semana atual
-        const today = new Date();
-        const currentWeekNum = getWeekNumber(today);
-        console.log(`📅 Semana atual: ${currentWeekNum}, Hoje: ${today.toLocaleDateString('pt-PT')}`);
-        
-        // Criar estrutura de 3 semanas (atual + 2)
+        // Usar a primeira semana do mês seleccionado como ponto de partida
+        const monthIndexMap = {'jan':0,'fev':1,'mar':2,'abr':3,'mai':4,'jun':5,'jul':6,'ago':7,'set':8,'out':9,'nov':10,'dez':11};
+        const selectedMonthIndex = monthIndexMap[currentMonth] ?? new Date().getMonth();
+        const firstDayOfMonth = new Date(currentYear, selectedMonthIndex, 1);
+        const startWeekNum = getWeekNumber(firstDayOfMonth);
+        console.log(`📅 Mês seleccionado: ${currentMonth}/${currentYear}, semana inicial: ${startWeekNum}`);
+
+        // Criar estrutura de 3 semanas (1ª semana do mês + 2 seguintes)
         const weeks = [];
         for (let i = 0; i < 3; i++) {
-            const weekNum = currentWeekNum + i;
+            const weekNum = startWeekNum + i;
             weeks.push({
                 num: weekNum,
-                days: generateWeekDays(weekNum),
+                days: generateWeekDays(weekNum, currentYear),
                 loads: {}
             });
         }
@@ -5643,9 +5645,8 @@ async function renderResumoCargas() {
     }
 }
 
-function generateWeekDays(weekNum) {
+function generateWeekDays(weekNum, year = currentYear) {
     // Gerar 7 dias de uma semana (seg-dom)
-    const year = 2026;
     const firstDayOfYear = new Date(year, 0, 1);
     const daysOffset = (weekNum - 1) * 7;
     const weekStart = new Date(firstDayOfYear);
@@ -5743,7 +5744,7 @@ window.openCargasDetalhe = function(dateKey) {
                     medida: encomendasData.data[`${i}_medida`] || '',
                     qtd: encomendasData.data[`${i}_qtd`] || '',
                     transp: transp,
-                    horario: horarioNormalizado || 'Indefinido',
+                    horario: horarioNormalizado,
                     obs: encomendasData.data[`${i}_obs`] || '',
                     slots,
                     rowSpan
