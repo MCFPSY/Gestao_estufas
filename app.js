@@ -3058,11 +3058,15 @@ function renderEncomendasGrid() {
 async function loadEncomendasData() {
     console.log('📥 Carregando encomendas para:', currentMonth + '/' + currentYear);
     
-    // 🔥 v2.51.21: Atualizar dropdown do mês para o mês atual
+    // 🔥 v2.51.21: Atualizar dropdown do mês para o mês atual (ambos os selectors)
     const monthSelector = document.getElementById('month-selector');
     if (monthSelector && monthSelector.value !== currentMonth) {
         monthSelector.value = currentMonth;
         console.log(`📅 Dropdown atualizado para: ${currentMonth}`);
+    }
+    const cargasMonthSelector = document.getElementById('cargas-month-selector');
+    if (cargasMonthSelector && cargasMonthSelector.value !== currentMonth) {
+        cargasMonthSelector.value = currentMonth;
     }
     
     try {
@@ -3974,7 +3978,11 @@ async function changeMonth(newMonth) {
     disconnectPresence();
     
     currentMonth = newMonth;
-    document.getElementById('month-selector').value = newMonth;
+    // Sincronizar ambos os selectors de mês
+    const monthSel = document.getElementById('month-selector');
+    if (monthSel) monthSel.value = newMonth;
+    const cargasSel = document.getElementById('cargas-month-selector');
+    if (cargasSel) cargasSel.value = newMonth;
     await loadEncomendasData();
     
     // Reconectar Realtime e Presença para o novo mês
@@ -5348,38 +5356,77 @@ function previewPdfData() {
 async function importPdfData() {
     // 🔥 v2.51.37: Usar parsedOrders do upload
     const orders = window.parsedOrders;
-    
+
     if (!orders || orders.length === 0) {
         showToast('⚠️ Nenhuma encomenda carregada. Faça upload do PDF primeiro.', 'warning');
         return;
     }
-    
+
     // Confirmar importação
     if (!confirm(`Importar ${orders.length} encomenda(s)?\n\nCampos vazios (Local, Transporte, Horário) podem ser preenchidos depois.`)) {
         return;
     }
-    
+
     try {
+        // Obter o maior row_order existente para atribuir valores sequenciais
+        const { data: maxData } = await db
+            .from('mapa_encomendas')
+            .select('row_order')
+            .order('row_order', { ascending: false })
+            .limit(1);
+        let nextRowOrder = (maxData && maxData.length > 0 && maxData[0].row_order != null)
+            ? maxData[0].row_order + 1
+            : 1;
+
+        // Mapa de meses para abreviaturas portuguesas
+        const monthAbbrs = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+
         // Preparar dados para inserir no formato correto
         const recordsToInsert = orders.map(order => {
+            // data_entrega vem do PDF em formato DD/MM/YYYY
+            let dateFormatted = '';
+            let monthName = '';
+            let yearNum = currentYear;
+
+            if (order.data_entrega) {
+                const parts = order.data_entrega.split('/');
+                if (parts.length === 3) {
+                    const day = parts[0];                         // "24"
+                    const monthIdx = parseInt(parts[1]) - 1;     // 0-based
+                    yearNum = parseInt(parts[2]);                 // 2026
+                    monthName = monthAbbrs[monthIdx] || '';       // "mar"
+                    dateFormatted = `${day}/${monthName}`;        // "24/mar"
+                }
+            }
+
+            // Calcular número da semana a partir da data formatada
+            let semNum = '';
+            if (dateFormatted) {
+                semNum = getWeekNumberFromDateStr(dateFormatted).toString();
+            }
+
             const record = {
                 enc: order.enc || '',
                 cliente: order.cliente || '',
-                data: order.data_entrega || '',
+                date: dateFormatted,           // "DD/mmm"  ← coluna correcta
+                month: monthName,              // "mmm"
+                year: yearNum,                 // 2026
+                sem: semNum,                   // número da semana ISO
                 medida: order.medida || '',
                 qtd: order.qtd !== undefined ? order.qtd.toString() : '',
                 local: '',
-                transp: '',  // Campo "transp" não "transporte"
-                horario_carga: ''
+                transp: '',
+                horario_carga: '',
+                row_order: nextRowOrder++
             };
             return record;
         });
-        
+
         // Inserir via Supabase
         const { data, error } = await db
             .from('mapa_encomendas')
             .insert(recordsToInsert);
-        
+
         if (error) throw error;
         
         showToast(`✅ ${orders.length} encomenda(s) importada(s) com sucesso!`, 'success');
@@ -5414,17 +5461,21 @@ async function renderResumoCargas() {
         for (let i = 0; i < encomendasData.dates.length; i++) {
             const data = encomendasData.dates[i];
             if (!data) continue;
-            
-            const transpKey = `${i}_transp`;  // ← CORRIGIDO: "transp" não "transporte"
+
+            const transpKey = `${i}_transp`;
             const transp = encomendasData.data[transpKey];
-            
+
             // Só incluir se tiver TRANSP preenchido
             if (transp && transp.trim() !== '') {
                 const horarioKey = `${i}_horario_carga`;
+                // 🔥 Guardar índice original para usar o campo sem directamente
                 cargas.push({
+                    index: i,
                     data: data,
                     horario_carga: encomendasData.data[horarioKey] || '',
-                    transp: transp
+                    transp: transp,
+                    // Usar sem do DB — consistente com renderCalendarioSemanal
+                    sem: parseInt(encomendasData.data[`${i}_sem`]) || 0
                 });
             }
         }
@@ -5453,51 +5504,31 @@ async function renderResumoCargas() {
         // Agrupar cargas por semana e dia
         cargas.forEach((carga, idx) => {
             if (!carga.data) return;
-            
-            console.log(`🔍 Carga ${idx}: data="${carga.data}", horario="${carga.horario_carga}"`);
-            
-            // Converter data para formato DD/MM/YYYY
+
+            // Converter data para formato DD/MM/YYYY (para usar como chave nos cards)
             let dateKey = carga.data;
-            let dia, mes, ano;
-            
-            // Detectar formato: "01/mar" ou "24/03/2026"
             if (carga.data.includes('/')) {
                 const parts = carga.data.split('/');
                 if (parts.length === 2) {
-                    // Formato "01/mar"
-                    dia = parts[0];
+                    // Formato "01/mar" → "01/04/2026"
                     const monthMap = {
                         'jan': '01', 'fev': '02', 'mar': '03', 'abr': '04',
                         'mai': '05', 'jun': '06', 'jul': '07', 'ago': '08',
                         'set': '09', 'out': '10', 'nov': '11', 'dez': '12'
                     };
-                    mes = monthMap[parts[1]] || '01';
-                    ano = currentYear.toString();
-                    dateKey = `${dia}/${mes}/${ano}`;
-                } else if (parts.length === 3) {
-                    // Formato "24/03/2026"
-                    dia = parts[0];
-                    mes = parts[1];
-                    ano = parts[2];
-                    dateKey = carga.data;
-                } else {
-                    console.warn('⚠️ Formato de data desconhecido:', carga.data);
-                    return;
+                    const mes = monthMap[parts[1]] || '01';
+                    dateKey = `${parts[0]}/${mes}/${currentYear}`;
                 }
-            } else {
-                console.warn('⚠️ Data sem barra:', carga.data);
-                return;
+                // Formato "24/03/2026" fica igual
             }
-            
-            const cargaDate = new Date(ano, parseInt(mes) - 1, parseInt(dia));
-            const cargaWeek = getWeekNumber(cargaDate);
-            
-            console.log(`   → Parsed: ${dia}/${mes}/${ano}, Week: ${cargaWeek}, Key: ${dateKey}`);
-            
+
+            // 🔥 Usar sem do DB directamente — evita inconsistências de cálculo
+            const cargaWeek = carga.sem;
+            if (!cargaWeek) return;
+
             // Só considerar cargas das 3 semanas
             const weekIndex = cargaWeek - currentWeekNum;
             if (weekIndex < 0 || weekIndex >= 3) {
-                console.log(`   ❌ Fora do range (week ${cargaWeek}, current ${currentWeekNum})`);
                 return;
             }
             

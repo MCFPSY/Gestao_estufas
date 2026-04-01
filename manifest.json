@@ -1,6 +1,6 @@
 {
   "name": "PSY Gestão",
-  "short_name": "PSY",
+  "short_name": "PSY Gestão",
   "description": "Sistema de gestão de secagens, encomendas e cargas",
   "start_url": "/Gestao_estufas/",
   "scope": "/Gestao_estufas/",
@@ -13,13 +13,25 @@
       "src": "/Gestao_estufas/icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/Gestao_estufas/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     },
     {
       "src": "/Gestao_estufas/icons/icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/Gestao_estufas/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
     },
     {
       "src": "/Gestao_estufas/icons/icon-144.png",

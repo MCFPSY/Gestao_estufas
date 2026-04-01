@@ -61,10 +61,7 @@
         }
     </style>
     
-    <!-- Favicon tradicional para Windows Desktop -->
-    <link rel="icon" type="image/x-icon" href="/Gestao_estufas/favicon.ico">
-    
-    <!-- PWA Icons - v2.51.35h: Pasta icons/ dedicada -->
+    <!-- PWA Icons — PNG prioritário sobre favicon.ico em todos os browsers modernos -->
     <link rel="icon" type="image/png" sizes="512x512" href="/Gestao_estufas/icons/icon-512.png">
     <link rel="icon" type="image/png" sizes="192x192" href="/Gestao_estufas/icons/icon-192.png">
     <link rel="icon" type="image/png" sizes="144x144" href="/Gestao_estufas/icons/icon-144.png">
@@ -73,7 +70,6 @@
     <link rel="icon" type="image/png" sizes="48x48" href="/Gestao_estufas/icons/icon-48.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/Gestao_estufas/icons/icon-48.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/Gestao_estufas/icons/icon-48.png">
-    <link rel="shortcut icon" href="/Gestao_estufas/favicon.ico">
     
     <!-- Apple Touch Icons -->
     <link rel="apple-touch-icon" sizes="180x180" href="/Gestao_estufas/icons/icon-192.png">
@@ -2361,11 +2357,26 @@
                 <div class="calendario-toolbar">
                     <div class="calendario-header">
                         <h2>🚚 Mapa Cargas</h2>
-                        <div class="calendario-info">
+                        <div class="calendario-info" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
                             <span>Semana <strong id="calendario-week-num">--</strong></span>
-                            <span style="margin-left:20px;color:#666;font-size:12px;">
-                                ℹ️ Apenas cargas com TRANSP preenchido
-                            </span>
+                            <div class="month-selector-container" style="margin:0;">
+                                <label for="cargas-month-selector" style="font-size:13px;color:#666;">Mês:</label>
+                                <select id="cargas-month-selector" onchange="changeMonth(this.value)" style="font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid #D1D1D6;background:white;cursor:pointer;">
+                                    <option value="jan">Janeiro 2026</option>
+                                    <option value="fev">Fevereiro 2026</option>
+                                    <option value="mar">Março 2026</option>
+                                    <option value="abr">Abril 2026</option>
+                                    <option value="mai">Maio 2026</option>
+                                    <option value="jun">Junho 2026</option>
+                                    <option value="jul">Julho 2026</option>
+                                    <option value="ago">Agosto 2026</option>
+                                    <option value="set">Setembro 2026</option>
+                                    <option value="out">Outubro 2026</option>
+                                    <option value="nov">Novembro 2026</option>
+                                    <option value="dez">Dezembro 2026</option>
+                                </select>
+                            </div>
+                            <span style="color:#666;font-size:12px;">ℹ️ Apenas cargas com TRANSP preenchido</span>
                         </div>
                     </div>
                     <div class="calendario-nav">
