@@ -5281,9 +5281,10 @@ function parsePdfText(rawText) {
 
     // 3. Encontrar todos os produtos com posição no texto
     // Formato A: "P080653930140S ..."  | Formato B: "P08121R04010S ...", "P08127R04T-MS ...", "#54111000001406 ..."
+    // Códigos P começam SEMPRE com dígito após P (P0...). Códigos # são só dígitos.
     // Unidades: UN ou VP
     const prodMatches = [];
-    const prodRegex = /([P#][A-Z0-9#\-]{4,})\s+(.+?)\s+([\d.]+,\d{3})\s+(?:UN|VP)/g;
+    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,})\s+(.+?)\s+([\d.]+,\d{3})\s+(?:UN|VP)/g;
     while ((m = prodRegex.exec(text)) !== null) {
         prodMatches.push({
             pos: m.index,
