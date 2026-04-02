@@ -364,16 +364,16 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         if (error) throw error;
         currentUser = data.user;
         
-        // ✅ Garantir que o utilizador existe na tabela profiles
+        // ✅ Carregar perfil completo (role + permissions)
         console.log('🔍 Verificando perfil para:', currentUser.id);
         const { data: profile, error: profileError } = await db
             .from('profiles')
-            .select('id')
+            .select('id, email, nome, role, permissions')
             .eq('id', currentUser.id)
             .single();
-        
+
         console.log('   Resultado da consulta:', { profile, profileError });
-        
+
         if (profileError) {
             if (profileError.code === 'PGRST116') {
                 // Utilizador não existe na tabela profiles → criar
@@ -388,16 +388,15 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
                     })
                     .select()
                     .single();
-                
+
                 if (insertError) {
                     console.error('❌ Erro ao criar perfil:', insertError);
                     console.error('   Código:', insertError.code);
                     console.error('   Detalhes:', insertError.details);
                     console.error('   Hint:', insertError.hint);
-                    
+
                     if (insertError.code === '42501') {
                         console.error('⚠️ RLS está a bloquear criação de perfil!');
-                        console.error('⚠️ Você precisa criar o perfil manualmente no Supabase ou ajustar políticas RLS.');
                         showToast('⚠️ Perfil não existe. Contacte o administrador.', 'error');
                         // NÃO bloquear login - deixar continuar
                     } else {
@@ -405,15 +404,23 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
                     }
                 } else {
                     console.log('✅ Perfil criado com sucesso!', newProfile);
+                    userPermissions = newProfile.permissions || {};
+                    currentUser.role = newProfile.role;
+                    currentUser.nome = newProfile.nome;
                 }
             } else {
                 console.error('❌ Erro desconhecido ao consultar perfil:', profileError);
             }
         } else {
-            console.log('✅ Perfil já existe:', profile);
+            console.log('✅ Perfil carregado:', profile);
+            userPermissions = profile.permissions || {};
+            currentUser.role = profile.role;
+            currentUser.nome = profile.nome;
+            console.log('🔑 Role:', currentUser.role, '| Permissões:', userPermissions);
         }
-        
+
         showApp();
+        applyPermissions();
         loadAllData();
         setupRealtime();
         showToast('Login realizado com sucesso!');
