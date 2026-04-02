@@ -5234,16 +5234,19 @@ window.closePdfImporter = function() {
 }
 
 function parsePdfText(rawText) {
-    // Parser para formato Primavera — suporta dois formatos:
-    // Formato A: "ECL 2026/167 24/03/2026 C0006 50,000 UN ..." + "P080653930140S PAL ... 50,000 UN"
-    // Formato B: "351.2026/94 07/04/2026 C0446 108,000 VP ..." + "P08121R04010S PAL ... VP"
-    //            (usa font PUA encoding: chars \uf020-\uf07f = ASCII + 0xF000)
-
-    // Decode PUA font encoding (Primavera Identity-H CIDFont)
-    const text = rawText.replace(/[\uf020-\uf0ff]/g, c => {
-        const code = c.charCodeAt(0) - 0xf000;
-        return (code >= 0x20 && code <= 0x7e) ? String.fromCharCode(code) : c;
-    });
+    // Parser para formato Primavera BSS (ECL YYYY/NNN)
+    // O font Primavera usa um mapeamento PUA completamente custom (não é ASCII+0xF000).
+    // Tabela derivada por análise visual do PDF renderizado vs texto extraído pelo PDF.js.
+    const PRIM_DECODE = {
+        '\uf027': ' ', '\uf029': 'E', '\uf02a': 'U', '\uf02b': 'R',
+        '\uf02c': '2', '\uf02d': '4', '\uf02e': '/', '\uf02f': '0',
+        '\uf030': '3', '\uf031': '6', '\uf032': ',', '\uf033': 'P',
+        '\uf036': ',', '\uf037': '1', '\uf038': '9', '\uf039': 'C',
+        '\uf03a': 'O', '\uf03c': 'S', '\uf03d': 'L', '\uf041': 'A',
+        '\uf042': '.', '\uf043': '5', '\uf044': 'N', '\uf045': '7',
+        '\uf046': '8', '\uf047': 'X', '\uf048': 'T',
+    };
+    const text = rawText.replace(/[\uf020-\uf0ff]/g, c => PRIM_DECODE[c] || c);
 
     console.log('📄 Iniciando parse do PDF PALSYSTEMS...');
     console.log('📄 Texto completo (primeiros 1000 chars):', text.substring(0, 1000));
@@ -5251,10 +5254,17 @@ function parsePdfText(rawText) {
     const orders = [];
     let m;
 
+    // Helper: parse quantidade suportando tanto "50,000" (vírgula=decimal) como "126.000" / "3,348.000"
+    function parseQtd(s) {
+        const t = s.trim();
+        if (t.includes(',') && t.includes('.')) return parseInt(t.replace(/,/g, '').split('.')[0]);
+        if (t.includes(',')) return parseInt(t.split(',')[0]);
+        return parseInt(t.split('.')[0]);
+    }
+
     // 1. Mapear código de cliente → nome
-    // Lookahead deteta tanto "ECL " como "NNN.YYYY/" como separador
     const clientMap = {};
-    const clientRegex = /(C\d{4,5})\s+([A-Z][A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s,\.'\-]+?)(?=\s+(?:\d+\.\d{4}\/\d+|ECL\s|Total\s|C\d{4}))/g;
+    const clientRegex = /(C\d{4,5})\s+([A-Z][A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s,\.'\-]+?)(?=\s+(?:ECL\s|Total\s|C\d{4}))/g;
     while ((m = clientRegex.exec(text)) !== null) {
         if (!clientMap[m[1]]) {
             clientMap[m[1]] = m[2].trim();
@@ -5262,11 +5272,10 @@ function parsePdfText(rawText) {
         }
     }
 
-    // 2. Encontrar todos os documentos de encomenda com posição no texto
-    // Formato A: "ECL 2026/167" | Formato B: "351.2026/94" ou "08.2026/110"
-    // Unidades: UN ou VP
+    // 2. Encontrar todos os documentos ECL com posição no texto
+    // Quantidade aceita vírgula ou ponto como separador decimal/milhar
     const eclMatches = [];
-    const eclRegex = /(\d+\.\d{4}\/\d+|ECL\s+\d{4}\/\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(C\d+)\s+([\d.]+,\d{3})\s+(?:UN|VP)/g;
+    const eclRegex = /(ECL\s+\d{4}\/\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(C\d+)\s+([\d.,]+)\s+(?:UN|VP)/g;
     while ((m = eclRegex.exec(text)) !== null) {
         eclMatches.push({
             pos: m.index,
@@ -5274,17 +5283,15 @@ function parsePdfText(rawText) {
             doc: m[1].trim().replace(/\s+/g, ' '),
             date: m[2],
             clientCode: m[3],
-            qtd: parseInt(m[4].replace(/\./g, '').split(',')[0])
+            qtd: parseQtd(m[4])
         });
     }
     console.log(`✅ ${eclMatches.length} documentos encontrados`);
 
     // 3. Encontrar todos os produtos com posição no texto
-    // Formato A: "P080653930140S ..."  | Formato B: "P08121R04010S ...", "P08127R04T-MS ...", "#54111000001406 ..."
     // Códigos P começam SEMPRE com dígito após P (P0...). Códigos # são só dígitos.
-    // Unidades: UN ou VP
     const prodMatches = [];
-    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,})\s+(.+?)\s+([\d.]+,\d{3})\s+(?:UN|VP)/g;
+    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,})\s+(.+?)\s+([\d.,]+)\s+(?:UN|VP)/g;
     while ((m = prodRegex.exec(text)) !== null) {
         prodMatches.push({
             pos: m.index,
