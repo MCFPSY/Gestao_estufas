@@ -5249,9 +5249,11 @@ function parsePdfText(rawText) {
         '\uf02c': '2', '\uf02d': '4', '\uf02e': '/', '\uf02f': '0',
         '\uf030': '3', '\uf031': '6', '\uf032': ',', '\uf033': 'P',
         '\uf036': ',', '\uf037': '1', '\uf038': '9', '\uf039': 'C',
-        '\uf03a': 'O', '\uf03c': 'S', '\uf03d': 'L', '\uf041': 'A',
-        '\uf042': '.', '\uf043': '5', '\uf044': 'N', '\uf045': '7',
-        '\uf046': '8', '\uf047': 'X', '\uf048': 'T',
+        '\uf03a': 'O', '\uf03c': 'S', '\uf03d': 'L', '\uf03f': 'T',
+        '\uf040': 'G', '\uf041': 'A', '\uf042': '.', '\uf043': '5',
+        '\uf044': 'N', '\uf045': '7', '\uf046': '8', '\uf047': 'X',
+        '\uf048': 'D', '\uf049': 'I', '\uf04e': '-', '\uf04f': 'C',
+        '\uf051': 'M', '\uf05f': 'J', '\uf060': 'E', '\uf061': 'A',
     };
     const text = rawText.replace(/[\uf020-\uf0ff]/g, c => PRIM_DECODE[c] || c);
 
@@ -5270,12 +5272,15 @@ function parsePdfText(rawText) {
     }
 
     // 1. Mapear código de cliente → nome
+    // Formato real: [nome empresa] [qty] [qty] [qty] UN [qty] C#### DD/MM/YYYY ECL ...
+    // O nome aparece como bloco de texto maiúsculo antes da primeira linha ECL do cliente.
     const clientMap = {};
-    const clientRegex = /(C\d{4,5})\s+([A-Z][A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s,\.'\-]+?)(?=\s+(?:ECL\s|Total\s|C\d{4}))/g;
+    const clientRegex = /([A-Z][A-Z\s,\.\-]{12,}?)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+UN\s+[\d.,]+\s+(C\d{4,5})\s+\d{2}\/\d{2}\/\d{4}\s+ECL/g;
     while ((m = clientRegex.exec(text)) !== null) {
-        if (!clientMap[m[1]]) {
-            clientMap[m[1]] = m[2].trim();
-            console.log(`👤 Cliente: ${m[1]} → ${clientMap[m[1]]}`);
+        const clientCode = m[2];
+        if (!clientMap[clientCode]) {
+            clientMap[clientCode] = m[1].trim();
+            console.log(`👤 Cliente: ${clientCode} → ${clientMap[clientCode]}`);
         }
     }
 
