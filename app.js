@@ -5280,25 +5280,26 @@ function parsePdfText(rawText) {
     }
 
     // 2. Encontrar todos os documentos ECL com posição no texto
-    // Quantidade aceita vírgula ou ponto como separador decimal/milhar
+    // Formato real do PDF: [qty] UN [qty] [client] [date] ECL YYYY/NNN
     const eclMatches = [];
-    const eclRegex = /(ECL\s+\d{4}\/\d+)\s+(\d{2}\/\d{2}\/\d{4})\s+(C\d+)\s+([\d.,]+)\s+(?:UN|VP)/g;
+    const eclRegex = /([\d.,]+)\s+(C\d{4,5})\s+(\d{2}\/\d{2}\/\d{4})\s+(ECL\s+\d{4}\/\d+)/g;
     while ((m = eclRegex.exec(text)) !== null) {
         eclMatches.push({
             pos: m.index,
             end: m.index + m[0].length,
-            doc: m[1].trim().replace(/\s+/g, ' '),
-            date: m[2],
-            clientCode: m[3],
-            qtd: parseQtd(m[4])
+            doc: m[4].trim().replace(/\s+/g, ' '),
+            date: m[3],
+            clientCode: m[2],
+            qtd: parseQtd(m[1])
         });
     }
     console.log(`✅ ${eclMatches.length} documentos encontrados`);
 
     // 3. Encontrar todos os produtos com posição no texto
+    // Formato: [code]  [desc]  [qty_total]  [qty_entregue]  [qty_restante] UN
     // Códigos P começam SEMPRE com dígito após P (P0...). Códigos # são só dígitos.
     const prodMatches = [];
-    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,})\s+(.+?)\s+([\d.,]+)\s+(?:UN|VP)/g;
+    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,})\s+(.+?)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+(?:UN|VP)/g;
     while ((m = prodRegex.exec(text)) !== null) {
         prodMatches.push({
             pos: m.index,
