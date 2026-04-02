@@ -3063,6 +3063,13 @@ function renderEncomendasGrid() {
 
 // Carregar dados do mês da BD
 async function loadEncomendasData() {
+    // Garantir que as alterações pendentes são salvas ANTES de recarregar,
+    // para não perder edições locais de nenhum utilizador
+    if (saveQueue && saveQueue.size > 0) {
+        console.log('⚠️ [load] Flushing', saveQueue.size, 'alterações pendentes antes de recarregar...');
+        await processSaveQueue();
+    }
+
     console.log('📥 Carregando encomendas para:', currentMonth + '/' + currentYear);
     
     // 🔥 v2.51.21: Atualizar dropdown do mês para o mês atual (ambos os selectors)
@@ -3592,7 +3599,13 @@ function handleRealtimeChange(payload) {
     if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
         const row = payload.new;
         const rowIndex = row.row_order;
-        
+
+        // Ignorar se há alterações locais pendentes para esta linha — o nosso save vai ganhar
+        if (saveQueue.has(rowIndex)) {
+            console.log('⚠️ [realtime] Linha', rowIndex, 'tem alterações pendentes — update remoto ignorado');
+            return;
+        }
+
         console.log('💾 Atualizando linha', rowIndex, 'localmente');
         
         // Atualizar dados locais
@@ -5383,7 +5396,6 @@ function previewPdfData() {
 }
 
 async function importPdfData() {
-    // 🔥 v2.51.37: Usar parsedOrders do upload
     const orders = window.parsedOrders;
 
     if (!orders || orders.length === 0) {
@@ -5391,80 +5403,118 @@ async function importPdfData() {
         return;
     }
 
-    // Confirmar importação
-    if (!confirm(`Importar ${orders.length} encomenda(s)?\n\nCampos vazios (Local, Transporte, Horário) podem ser preenchidos depois.`)) {
+    const monthAbbrs = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+
+    // Converter cada ordem do PDF para o formato da BD e calcular chave única
+    function preparePdfRecord(order) {
+        let dateFormatted = '', monthName = '', yearNum = currentYear, semNum = '';
+        if (order.data_entrega) {
+            const parts = order.data_entrega.split('/');
+            if (parts.length === 3) {
+                const day = parts[0];
+                const monthIdx = parseInt(parts[1]) - 1;
+                yearNum = parseInt(parts[2]);
+                monthName = monthAbbrs[monthIdx] || '';
+                dateFormatted = `${day}/${monthName}`;
+                semNum = getWeekNumberFromDateStr(dateFormatted).toString();
+            }
+        }
+        return {
+            enc: order.enc || '',
+            cliente: order.cliente || '',
+            date: dateFormatted,
+            month: monthName,
+            year: yearNum,
+            sem: semNum,
+            medida: order.medida || '',
+            qtd: order.qtd !== undefined ? order.qtd.toString() : '',
+        };
+    }
+
+    // Chave única: ECL + data + produto
+    const key = r => `${r.enc}|${r.date}|${r.medida}`;
+
+    const pdfRecords = orders.map(preparePdfRecord);
+    const pdfMap = new Map(pdfRecords.map(r => [key(r), r]));
+
+    // Buscar registos existentes para os meses cobertos pelo PDF
+    const monthsInPdf = [...new Set(pdfRecords.map(r => `${r.month}/${r.year}`))];
+    const existingRows = [];
+    for (const my of monthsInPdf) {
+        const [m, y] = my.split('/');
+        const { data } = await db
+            .from('mapa_encomendas')
+            .select('id, enc, date, medida, qtd, cliente, row_order')
+            .eq('month', m)
+            .eq('year', parseInt(y));
+        if (data) existingRows.push(...data);
+    }
+    const dbMap = new Map(existingRows.map(r => [key(r), r]));
+
+    // Calcular diff
+    const toInsert = [], toUpdate = [], toSkip = [], removedFromPdf = [];
+
+    pdfMap.forEach((pdfRec, k) => {
+        if (!dbMap.has(k)) {
+            toInsert.push(pdfRec);
+        } else {
+            const dbRec = dbMap.get(k);
+            if (dbRec.qtd !== pdfRec.qtd || dbRec.cliente !== pdfRec.cliente) {
+                toUpdate.push({ id: dbRec.id, changes: { qtd: pdfRec.qtd, cliente: pdfRec.cliente, sem: pdfRec.sem } });
+            } else {
+                toSkip.push(k);
+            }
+        }
+    });
+    dbMap.forEach((dbRec, k) => {
+        if (!pdfMap.has(k)) removedFromPdf.push(dbRec);
+    });
+
+    // Mostrar diff e pedir confirmação
+    const lines = [];
+    if (toInsert.length)      lines.push(`➕ ${toInsert.length} nova(s) (serão adicionadas)`);
+    if (toUpdate.length)      lines.push(`✏️  ${toUpdate.length} com quantidade/cliente alterados (serão atualizadas)`);
+    if (toSkip.length)        lines.push(`✅ ${toSkip.length} sem alterações (ignoradas)`);
+    if (removedFromPdf.length) lines.push(`⚠️  ${removedFromPdf.length} no sistema já não constam no PDF (não serão eliminadas)`);
+
+    if (toInsert.length === 0 && toUpdate.length === 0) {
+        showToast('✅ PDF sem diferenças — todos os dados já estão atualizados.', 'success');
         return;
     }
 
+    if (!confirm(`Sincronizar com PDF:\n\n${lines.join('\n')}\n\nContinuar?`)) return;
+
     try {
-        // Obter o maior row_order existente para atribuir valores sequenciais
-        const { data: maxData } = await db
-            .from('mapa_encomendas')
-            .select('row_order')
-            .order('row_order', { ascending: false })
-            .limit(1);
-        let nextRowOrder = (maxData && maxData.length > 0 && maxData[0].row_order != null)
-            ? maxData[0].row_order + 1
-            : 1;
+        // INSERT novas linhas
+        if (toInsert.length > 0) {
+            const { data: maxData } = await db
+                .from('mapa_encomendas').select('row_order')
+                .order('row_order', { ascending: false }).limit(1);
+            let nextRowOrder = (maxData && maxData[0]?.row_order != null) ? maxData[0].row_order + 1 : 1;
 
-        // Mapa de meses para abreviaturas portuguesas
-        const monthAbbrs = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+            const recordsToInsert = toInsert.map(r => ({
+                ...r, local: '', transp: '', horario_carga: '', row_order: nextRowOrder++
+            }));
+            const { error } = await db.from('mapa_encomendas').insert(recordsToInsert);
+            if (error) throw error;
+        }
 
-        // Preparar dados para inserir no formato correto
-        const recordsToInsert = orders.map(order => {
-            // data_entrega vem do PDF em formato DD/MM/YYYY
-            let dateFormatted = '';
-            let monthName = '';
-            let yearNum = currentYear;
+        // UPDATE linhas alteradas (só campos do PDF — preserva local/transp/horario/obs)
+        for (const { id, changes } of toUpdate) {
+            const { error } = await db.from('mapa_encomendas').update(changes).eq('id', id);
+            if (error) throw error;
+        }
 
-            if (order.data_entrega) {
-                const parts = order.data_entrega.split('/');
-                if (parts.length === 3) {
-                    const day = parts[0];                         // "24"
-                    const monthIdx = parseInt(parts[1]) - 1;     // 0-based
-                    yearNum = parseInt(parts[2]);                 // 2026
-                    monthName = monthAbbrs[monthIdx] || '';       // "mar"
-                    dateFormatted = `${day}/${monthName}`;        // "24/mar"
-                }
-            }
+        const summary = [
+            toInsert.length ? `${toInsert.length} adicionada(s)` : '',
+            toUpdate.length ? `${toUpdate.length} atualizada(s)` : '',
+        ].filter(Boolean).join(', ');
 
-            // Calcular número da semana a partir da data formatada
-            let semNum = '';
-            if (dateFormatted) {
-                semNum = getWeekNumberFromDateStr(dateFormatted).toString();
-            }
-
-            const record = {
-                enc: order.enc || '',
-                cliente: order.cliente || '',
-                date: dateFormatted,           // "DD/mmm"  ← coluna correcta
-                month: monthName,              // "mmm"
-                year: yearNum,                 // 2026
-                sem: semNum,                   // número da semana ISO
-                medida: order.medida || '',
-                qtd: order.qtd !== undefined ? order.qtd.toString() : '',
-                local: '',
-                transp: '',
-                horario_carga: '',
-                row_order: nextRowOrder++
-            };
-            return record;
-        });
-
-        // Inserir via Supabase
-        const { data, error } = await db
-            .from('mapa_encomendas')
-            .insert(recordsToInsert);
-
-        if (error) throw error;
-        
-        showToast(`✅ ${orders.length} encomenda(s) importada(s) com sucesso!`, 'success');
+        showToast(`✅ ${summary}`, 'success');
         closePdfImporter();
-        
-        // Recarregar dados
         await loadEncomendasData();
         renderEncomendasGrid();
-        
+
     } catch (err) {
         console.error('Erro ao importar PDF:', err);
         showToast('❌ Erro ao importar dados: ' + err.message, 'error');
