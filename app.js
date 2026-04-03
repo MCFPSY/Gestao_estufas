@@ -5268,46 +5268,63 @@ async function showDiffPreview(orders) {
     const pdfRecords = orders.map(preparePdfRecord);
     const pdfMap = new Map(pdfRecords.map(r => [key(r), r]));
 
-    // Buscar registos existentes para os meses cobertos pelo PDF
+    // Buscar todos os campos (incluindo colunas manuais) para os meses cobertos pelo PDF
     const monthsInPdf = [...new Set(pdfRecords.map(r => `${r.month}/${r.year}`))];
     const existingRows = [];
     for (const my of monthsInPdf) {
         const [m, y] = my.split('/');
         const { data } = await db
             .from('mapa_encomendas')
-            .select('id, enc, date, medida, qtd, cliente, row_order')
+            .select('id, enc, date, medida, qtd, cliente, sem, local, transp, et, nviagem, horario_carga, obs, row_order')
             .eq('month', m)
             .eq('year', parseInt(y));
         if (data) existingRows.push(...data);
     }
-    // Ignorar linhas da BD sem enc nem medida (linhas vazias/placeholder)
     const meaningfulRows = existingRows.filter(r => r.enc && r.enc.trim() !== '');
-    const dbMap = new Map(meaningfulRows.map(r => [key(r), r]));
 
-    // Calcular diff
+    // Fase 1: correspondência exata (enc|date|medida)
+    const dbExactMap = new Map(meaningfulRows.map(r => [key(r), r]));
+
+    // Fase 2: índice só por enc para detetar "data alterada no mesmo pedido"
+    const dbEncMap = new Map();
+    meaningfulRows.forEach(r => {
+        if (!dbEncMap.has(r.enc)) dbEncMap.set(r.enc, []);
+        dbEncMap.get(r.enc).push(r);
+    });
+
     const toInsert = [], toUpdate = [], toSkip = [], removedFromPdf = [];
+    const matchedDbIds = new Set();
 
-    pdfMap.forEach((pdfRec, k) => {
-        if (!dbMap.has(k)) {
-            toInsert.push(pdfRec);
-        } else {
-            const dbRec = dbMap.get(k);
+    pdfMap.forEach((pdfRec) => {
+        const k = key(pdfRec);
+        if (dbExactMap.has(k)) {
+            const dbRec = dbExactMap.get(k);
+            matchedDbIds.add(dbRec.id);
             if (dbRec.qtd !== pdfRec.qtd || dbRec.cliente !== pdfRec.cliente) {
                 toUpdate.push({ pdfRec, dbRec });
             } else {
                 toSkip.push(pdfRec);
             }
+        } else {
+            // Fallback: procurar por enc único não correspondido (data ou medida alterou)
+            const encMatches = (dbEncMap.get(pdfRec.enc) || []).filter(r => !matchedDbIds.has(r.id));
+            if (encMatches.length === 1) {
+                const dbRec = encMatches[0];
+                matchedDbIds.add(dbRec.id);
+                const anyDiff = ['date','medida','qtd','cliente','sem'].some(f => String(pdfRec[f]||'') !== String(dbRec[f]||''));
+                if (anyDiff) toUpdate.push({ pdfRec, dbRec });
+                else toSkip.push(pdfRec);
+            } else {
+                toInsert.push(pdfRec);
+            }
         }
     });
-    dbMap.forEach((dbRec, k) => {
-        if (!pdfMap.has(k)) removedFromPdf.push(dbRec);
-    });
+    meaningfulRows.forEach(r => { if (!matchedDbIds.has(r.id)) removedFromPdf.push(r); });
 
-    // Guardar diff para usar no import (sem recomputar)
+    // Guardar diff para usar no import — guarda pdfRec + dbRec completos
     window.importDiff = {
         toInsert,
-        toUpdate: toUpdate.map(x => ({ id: x.dbRec.id, changes: { qtd: x.pdfRec.qtd, cliente: x.pdfRec.cliente, sem: x.pdfRec.sem } })),
-        // Linhas existentes (com row_order) para calcular posicionamento correto no import
+        toUpdate: toUpdate.map(x => ({ id: x.dbRec.id, pdfRec: x.pdfRec, dbRec: x.dbRec })),
         existingRows: existingRows.sort((a, b) => (a.row_order || 0) - (b.row_order || 0)),
     };
 
@@ -5321,46 +5338,82 @@ async function showDiffPreview(orders) {
     }
     html += '</div>';
 
-    // Tabela — só mostra linhas que serão afetadas pelo import
-    const hasUpdates = toUpdate.length > 0;
-    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    // Colunas do PDF (serão atualizadas) vs colunas manuais (preservadas)
+    const MANUAL_COLS = [
+        { key: 'local', label: 'Local' },
+        { key: 'transp', label: 'Transp' },
+        { key: 'et', label: 'E.T.' },
+        { key: 'nviagem', label: 'NºViagem' },
+        { key: 'horario_carga', label: 'Horário' },
+        { key: 'obs', label: 'Obs' },
+    ];
+
+    const BADGE_INSERT = '<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:4px;font-weight:700;font-size:12px;background:#28A745;color:#fff;">+</span>';
+    const BADGE_UPDATE = '<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:4px;font-weight:700;font-size:12px;background:#FF9500;color:#fff;">✎</span>';
+
+    const TH = (label, extra='') => `<th style="padding:4px 7px;text-align:left;white-space:nowrap;font-size:11px;${extra}">${label}</th>`;
+    const TD = (content, extra='') => `<td style="padding:4px 7px;font-size:11px;${extra}">${content}</td>`;
+
+    html += '<div style="overflow-x:auto;">';
+    html += '<table style="width:100%;border-collapse:collapse;min-width:900px;">';
     html += '<thead><tr style="background:#E5E5EA;font-weight:600;">';
-    html += '<th style="padding:5px 8px;text-align:left;white-space:nowrap;"></th>';
-    html += '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">ENC.</th>';
-    html += '<th style="padding:5px 8px;text-align:left;">Cliente</th>';
-    html += '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">Data</th>';
-    html += '<th style="padding:5px 8px;text-align:left;">Medida</th>';
-    html += '<th style="padding:5px 8px;text-align:right;white-space:nowrap;">Qtd</th>';
-    if (hasUpdates) html += '<th style="padding:5px 8px;text-align:right;white-space:nowrap;color:#999;">Qtd anterior</th>';
+    html += TH('');
+    html += TH('Data');
+    html += TH('ENC.');
+    html += TH('Medida');
+    html += TH('Qtd', 'text-align:right;');
+    html += TH('Cliente');
+    html += TH('SEM', 'text-align:right;');
+    MANUAL_COLS.forEach(c => html += `<th style="padding:4px 7px;text-align:left;white-space:nowrap;font-size:11px;color:#888;">${c.label}</th>`);
     html += '</tr></thead><tbody>';
 
-    const BADGE_INSERT = '<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:4px;font-weight:700;font-size:13px;background:#28A745;color:#fff;">+</span>';
-    const BADGE_UPDATE = '<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:4px;font-weight:700;font-size:13px;background:#FF9500;color:#fff;">✎</span>';
-
-    function row(badge, bg, r, qtd, qtdOld) {
-        return `<tr style="background:${bg};border-bottom:1px solid rgba(0,0,0,0.04);">
-            <td style="padding:5px 8px;">${badge}</td>
-            <td style="padding:5px 8px;white-space:nowrap;">${r.enc || '—'}</td>
-            <td style="padding:5px 8px;">${r.cliente || '—'}</td>
-            <td style="padding:5px 8px;white-space:nowrap;">${r.date || '—'}</td>
-            <td style="padding:5px 8px;">${r.medida || '—'}</td>
-            <td style="padding:5px 8px;text-align:right;font-weight:600;">${qtd}</td>
-            ${hasUpdates ? `<td style="padding:5px 8px;text-align:right;color:#AAA;text-decoration:${qtdOld ? 'line-through' : 'none'};">${qtdOld || ''}</td>` : ''}
-        </tr>`;
+    function diffCell(newVal, oldVal, rightAlign) {
+        const n = newVal || '—', o = oldVal || '—';
+        const changed = String(newVal||'') !== String(oldVal||'');
+        const style = `padding:4px 7px;font-size:11px;${rightAlign?'text-align:right;':''}${changed?'font-weight:600;color:#CC6600;':''}`;
+        const content = changed
+            ? `${n} <span style="color:#BBB;text-decoration:line-through;font-size:10px;">${o}</span>`
+            : n;
+        return `<td style="${style}">${content}</td>`;
     }
 
-    // Apenas mostrar o que vai ser alterado pelo import
     toInsert.forEach(r => {
-        html += row(BADGE_INSERT, '#F0FFF4', r, r.qtd || '—', null);
-    });
-    toUpdate.forEach(({ pdfRec, dbRec }) => {
-        html += row(BADGE_UPDATE, '#FFFBF0', pdfRec, pdfRec.qtd || '—', dbRec.qtd || '—');
+        let tr = `<tr style="background:#F0FFF4;border-bottom:1px solid rgba(0,0,0,0.04);">`;
+        tr += TD(BADGE_INSERT);
+        tr += TD(r.date || '—');
+        tr += TD(r.enc || '—');
+        tr += TD(r.medida || '—');
+        tr += TD(r.qtd || '—', 'text-align:right;font-weight:600;');
+        tr += TD(r.cliente || '—');
+        tr += TD(r.sem || '—', 'text-align:right;');
+        MANUAL_COLS.forEach(() => tr += TD('—', 'color:#CCC;'));
+        tr += '</tr>';
+        html += tr;
     });
 
-    html += '</tbody></table>';
+    toUpdate.forEach(({ pdfRec, dbRec }) => {
+        let tr = `<tr style="background:#FFFBF0;border-bottom:1px solid rgba(0,0,0,0.04);">`;
+        tr += TD(BADGE_UPDATE);
+        tr += diffCell(pdfRec.date, dbRec.date, false);
+        tr += diffCell(pdfRec.enc, dbRec.enc, false);
+        tr += diffCell(pdfRec.medida, dbRec.medida, false);
+        tr += diffCell(pdfRec.qtd, dbRec.qtd, true);
+        tr += diffCell(pdfRec.cliente, dbRec.cliente, false);
+        tr += diffCell(pdfRec.sem, dbRec.sem ? String(dbRec.sem) : '', true);
+        MANUAL_COLS.forEach(c => {
+            const val = dbRec[c.key] || '';
+            tr += `<td style="padding:4px 7px;font-size:11px;color:#888;font-style:italic;" title="preservado">${val || '—'}</td>`;
+        });
+        tr += '</tr>';
+        html += tr;
+    });
+
+    html += '</tbody></table></div>';
 
     if (toInsert.length === 0 && toUpdate.length === 0) {
         html += '<p style="margin-top:12px;text-align:center;color:#34C759;font-weight:600;font-size:13px;">✅ PDF sem diferenças — todos os dados já estão atualizados.</p>';
+    } else {
+        html += '<p style="margin-top:8px;font-size:10px;color:#999;">Colunas em itálico cinzento (Local, Transp, etc.) são preservadas tal como estão na base de dados.</p>';
     }
 
     previewEl.innerHTML = html;
@@ -5517,20 +5570,32 @@ async function importPdfData() {
     }
 
     try {
-        // ── 1. UPDATES (qtd/cliente changed) — parallel, no ordering needed ──
+        // ── 1. UPDATES — patch only PDF-provided fields, preserve manual columns ──
         if (toUpdate.length > 0) {
             statusEl.innerHTML = `<span style="color:#FF9500;">✎ Atualizando ${toUpdate.length} linha(s)...</span>`;
-            await Promise.all(toUpdate.map(({ id, changes }) =>
-                db.from('mapa_encomendas').update(changes).eq('id', id)
-            ));
-            // Audit: log each updated row
-            toUpdate.forEach(({ id, changes }) => {
+            // PDF-provided fields: date, month, year, enc, medida, qtd, cliente, sem
+            // Manual fields (local, transp, et, nviagem, horario_carga, obs) are NOT touched
+            await Promise.all(toUpdate.map(({ id, pdfRec }) => {
+                const changes = {
+                    date: pdfRec.date,
+                    month: pdfRec.month,
+                    year: pdfRec.year,
+                    enc: pdfRec.enc,
+                    medida: pdfRec.medida,
+                    qtd: pdfRec.qtd,
+                    cliente: pdfRec.cliente,
+                    sem: pdfRec.sem,
+                };
+                return db.from('mapa_encomendas').update(changes).eq('id', id);
+            }));
+            // Audit
+            toUpdate.forEach(({ id, pdfRec, dbRec }) => {
                 logHistory('PDF_UPDATE', {
-                    enc: changes.enc,
-                    date: changes.date,
-                    field_name: 'qtd/cliente',
-                    new_value: JSON.stringify(changes),
-                    details: `PDF re-import update (id=${id})`,
+                    enc: pdfRec.enc,
+                    date: pdfRec.date,
+                    field_name: 'pdf_reimport',
+                    new_value: JSON.stringify({ date: pdfRec.date, enc: pdfRec.enc, medida: pdfRec.medida, qtd: pdfRec.qtd, cliente: pdfRec.cliente }),
+                    details: `anterior: ${JSON.stringify({ date: dbRec.date, enc: dbRec.enc, medida: dbRec.medida, qtd: dbRec.qtd, cliente: dbRec.cliente })} (id=${id})`,
                 });
             });
         }
