@@ -4085,9 +4085,15 @@ async function deleteRow(index) {
     const date = encomendasData.dates[realIndex];
     
     if (confirm(`Apagar linha ${date}?`)) {
+        // Capturar dados da linha ANTES de apagar (para o log de auditoria)
+        const deletedRowSnapshot = { date };
+        encomendasData.fields.forEach(field => {
+            deletedRowSnapshot[field.key] = encomendasData.data[`${realIndex}_${field.key}`] || '';
+        });
+
         // Remover a data do array
         encomendasData.dates.splice(realIndex, 1);
-        
+
         // Reconstruir o objeto data com novos índices
         const newData = {};
         encomendasData.dates.forEach((d, newIndex) => {
@@ -4099,10 +4105,18 @@ async function deleteRow(index) {
                 }
             });
         });
-        
+
         encomendasData.data = newData;
-        
-        logHistory('DELETE', { date: date, row_order: realIndex });
+
+        logHistory('DELETE', {
+            date,
+            row_order: realIndex,
+            enc: deletedRowSnapshot.enc,
+            cliente: deletedRowSnapshot.cliente,
+            medida: deletedRowSnapshot.medida,
+            qtd: deletedRowSnapshot.qtd,
+            new_value: JSON.stringify(deletedRowSnapshot),
+        });
         renderEncomendasGrid();
         
         // Salvar todas as linhas (necessário porque reindexamos)
@@ -4206,11 +4220,13 @@ function renderCalendarioSemanal() {
         // Ignorar posições vazias (gaps no array)
         if (!date || date.trim() === '') return;
         
-        const semana = encomendasData.data[`${originalIndex}_sem`];
+        const semanaRaw = encomendasData.data[`${originalIndex}_sem`];
+        // Se sem está vazio/null na BD, calcular a partir da data
+        const semana = (semanaRaw && semanaRaw !== '') ? semanaRaw : getWeekNumberFromDateStr(date).toString();
         const transp = encomendasData.data[`${originalIndex}_transp`];
         const horario = encomendasData.data[`${originalIndex}_horario_carga`] || '';
         const cliente = encomendasData.data[`${originalIndex}_cliente`] || '';
-        
+
         // 🔥 v2.51.29: Log cargas da semana SEM transp (para debug)
         if (parseInt(semana) === currentCalendarioWeek && (!transp || transp.trim() === '')) {
             cargasSemTransp.push({
@@ -4373,22 +4389,32 @@ function renderCalendarioSemanal() {
     grid.style.gridTemplateColumns = `140px repeat(${numColunas}, 1fr)`;
     console.log(`📐 Grid configurado para ${numColunas} colunas (dias: ${weekDates.map(d => d.dayName).join(', ')})`);
     
+    // Pré-calcular total de cargas por dia (para o header)
+    const totalCargasPorDia = {};
+    weekDates.forEach(d => {
+        totalCargasPorDia[d.dateStr] = cargas.filter(c => normalizeDateFormat(c.date) === d.dateStr).length;
+    });
+
     // Header Row
     const headerTime = document.createElement('div');
     headerTime.className = 'calendario-header-cell';
     headerTime.textContent = 'Horário';
     grid.appendChild(headerTime);
-    
+
     weekDates.forEach(d => {
         const header = document.createElement('div');
         header.className = 'calendario-header-cell';
-        header.innerHTML = `<div style="font-weight:700;">${d.dayName}</div><div style="font-size:12px;color:#666;margin-top:4px;">${d.dateStr}</div>`;
+        const totalDia = totalCargasPorDia[d.dateStr] || 0;
+        const totalBadge = totalDia > 0
+            ? `<span style="display:inline-block;background:#007AFF;color:white;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:6px;">${totalDia}</span>`
+            : '';
+        header.innerHTML = `<div style="font-weight:700;">${d.dayName}${totalBadge}</div><div style="font-size:12px;color:#666;margin-top:4px;">${d.dateStr}</div>`;
         grid.appendChild(header);
     });
-    
+
     // Contador de blocos renderizados
     let totalBlocosRenderizados = 0;
-    
+
     // 🔥 v2.51.6: Agrupar cargas por dia e calcular row-span
     const cargasPorDia = {};
     
@@ -4432,9 +4458,16 @@ function renderCalendarioSemanal() {
                     slots = ['12:00 - 14:00'];
                     rowSpan = 4;
                 } else {
-                    // Horário específico: já normalizado acima
-                    slots = [horarioNormalizado];
-                    rowSpan = 1;
+                    // Horário específico: verificar se corresponde a um slot conhecido
+                    const knownSlots = ['06:00 - 08:00','08:00 - 10:00','10:00 - 12:00','12:00 - 14:00','14:00 - 16:00','16:00 - 18:00','18:00 - 20:00'];
+                    if (knownSlots.includes(horarioNormalizado)) {
+                        slots = [horarioNormalizado];
+                        rowSpan = 1;
+                    } else {
+                        // Horário livre (ex: "10-15H - AGENDAR...") → linha Sem Horário
+                        slots = ['SEM_HORARIO'];
+                        rowSpan = 1;
+                    }
                 }
                 
                 // Retornar carga com horário normalizado
@@ -4613,11 +4646,20 @@ function renderCalendarioSemanal() {
                 };
                 dayCell.appendChild(event);
             });
-            
+
+            // Badge de contagem sempre visível no canto superior direito da célula
+            if (cargasNesteSlot.length > 0) {
+                dayCell.style.position = 'relative';
+                const countBadge = document.createElement('div');
+                countBadge.style.cssText = 'position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.6);color:white;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;z-index:30;pointer-events:none;';
+                countBadge.textContent = cargasNesteSlot.length;
+                dayCell.appendChild(countBadge);
+            }
+
             grid.appendChild(dayCell);
         });
     });
-    
+
     container.innerHTML = '';
     container.appendChild(navContainer); // 🔥 v2.51.16: Navegação de dias
     container.appendChild(grid);
@@ -5179,13 +5221,16 @@ window.handlePdfUpload = async function(event) {
             return;
         }
         
-        statusEl.innerHTML = `<span style="color: #34C759;">✅ ${orders.length} encomenda(s) encontrada(s)</span>`;
-        
-        // Mostrar preview
-        showPdfPreview(orders);
-        
         // Guardar orders globalmente para importar depois
         window.parsedOrders = orders;
+        window.importDiff = null;
+
+        statusEl.innerHTML = `<span style="color: #34C759;">✅ ${orders.length} encomenda(s) encontrada(s) — a comparar com BD...</span>`;
+
+        // Mostrar diff preview (async — compara com BD)
+        await showDiffPreview(orders);
+
+        statusEl.innerHTML = `<span style="color: #34C759;">✅ ${orders.length} encomenda(s) encontrada(s)</span>`;
         
     } catch (error) {
         console.error('Erro ao processar PDF:', error);
@@ -5193,39 +5238,132 @@ window.handlePdfUpload = async function(event) {
     }
 };
 
-function showPdfPreview(orders) {
+async function showDiffPreview(orders) {
     const previewContainer = document.getElementById('pdf-preview-container');
     const previewEl = document.getElementById('pdf-preview');
-    
-    const previewOrders = orders.slice(0, 5);
-    
-    let html = '<table style="width: 100%; border-collapse: collapse; font-size: 12px;">';
-    html += '<tr style="background: #E5E5EA; font-weight: 600;">';
-    html += '<th style="padding: 8px; text-align: left;">ENC.</th>';
-    html += '<th style="padding: 8px; text-align: left;">Cliente</th>';
-    html += '<th style="padding: 8px; text-align: left;">Data</th>';
-    html += '<th style="padding: 8px; text-align: left;">Medida</th>';
-    html += '<th style="padding: 8px; text-align: right;">Qtd</th>';
-    html += '</tr>';
-    
-    previewOrders.forEach(order => {
-        html += '<tr style="border-bottom: 1px solid #E5E5EA;">';
-        html += `<td style="padding: 8px;">${order.enc || '—'}</td>`;
-        html += `<td style="padding: 8px;">${order.cliente || '—'}</td>`;
-        html += `<td style="padding: 8px;">${order.data_entrega || '—'}</td>`;
-        html += `<td style="padding: 8px;">${order.medida || '—'}</td>`;
-        html += `<td style="padding: 8px; text-align: right;">${order.qtd || '—'}</td>`;
-        html += '</tr>';
-    });
-    
-    html += '</table>';
-    
-    if (orders.length > 5) {
-        html += `<p style="margin-top: 12px; color: #666; font-size: 11px;">... e mais ${orders.length - 5} encomenda(s)</p>`;
-    }
-    
-    previewEl.innerHTML = html;
+
+    // Mostrar loading imediatamente
+    previewEl.innerHTML = '<p style="text-align:center;padding:20px;color:#666;">⏳ A comparar com dados existentes...</p>';
     previewContainer.style.display = 'block';
+
+    const monthAbbrs = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+
+    function preparePdfRecord(order) {
+        let dateFormatted = '', monthName = '', yearNum = currentYear, semNum = '';
+        if (order.data_entrega) {
+            const parts = order.data_entrega.split('/');
+            if (parts.length === 3) {
+                const day = parts[0];
+                const monthIdx = parseInt(parts[1]) - 1;
+                yearNum = parseInt(parts[2]);
+                monthName = monthAbbrs[monthIdx] || '';
+                dateFormatted = `${day}/${monthName}`;
+                semNum = getWeekNumberFromDateStr(dateFormatted).toString();
+            }
+        }
+        return { enc: order.enc || '', cliente: order.cliente || '', date: dateFormatted, month: monthName, year: yearNum, sem: semNum, medida: order.medida || '', qtd: order.qtd !== undefined ? order.qtd.toString() : '' };
+    }
+
+    const key = r => `${r.enc}|${r.date}|${r.medida}`;
+    const pdfRecords = orders.map(preparePdfRecord);
+    const pdfMap = new Map(pdfRecords.map(r => [key(r), r]));
+
+    // Buscar registos existentes para os meses cobertos pelo PDF
+    const monthsInPdf = [...new Set(pdfRecords.map(r => `${r.month}/${r.year}`))];
+    const existingRows = [];
+    for (const my of monthsInPdf) {
+        const [m, y] = my.split('/');
+        const { data } = await db
+            .from('mapa_encomendas')
+            .select('id, enc, date, medida, qtd, cliente, row_order')
+            .eq('month', m)
+            .eq('year', parseInt(y));
+        if (data) existingRows.push(...data);
+    }
+    // Ignorar linhas da BD sem enc nem medida (linhas vazias/placeholder)
+    const meaningfulRows = existingRows.filter(r => r.enc && r.enc.trim() !== '');
+    const dbMap = new Map(meaningfulRows.map(r => [key(r), r]));
+
+    // Calcular diff
+    const toInsert = [], toUpdate = [], toSkip = [], removedFromPdf = [];
+
+    pdfMap.forEach((pdfRec, k) => {
+        if (!dbMap.has(k)) {
+            toInsert.push(pdfRec);
+        } else {
+            const dbRec = dbMap.get(k);
+            if (dbRec.qtd !== pdfRec.qtd || dbRec.cliente !== pdfRec.cliente) {
+                toUpdate.push({ pdfRec, dbRec });
+            } else {
+                toSkip.push(pdfRec);
+            }
+        }
+    });
+    dbMap.forEach((dbRec, k) => {
+        if (!pdfMap.has(k)) removedFromPdf.push(dbRec);
+    });
+
+    // Guardar diff para usar no import (sem recomputar)
+    window.importDiff = {
+        toInsert,
+        toUpdate: toUpdate.map(x => ({ id: x.dbRec.id, changes: { qtd: x.pdfRec.qtd, cliente: x.pdfRec.cliente, sem: x.pdfRec.sem } })),
+        // Linhas existentes (com row_order) para calcular posicionamento correto no import
+        existingRows: existingRows.sort((a, b) => (a.row_order || 0) - (b.row_order || 0)),
+    };
+
+    // --- Render ---
+    const BADGE_S = 'display:inline-block;width:18px;height:18px;line-height:18px;text-align:center;border-radius:3px;font-weight:700;font-size:12px;vertical-align:middle;margin-right:5px;';
+    let html = '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">';
+    html += `<span style="background:#D4EDDA;color:#155724;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:600;"><span style="${BADGE_S}background:#28A745;color:#fff;">+</span>${toInsert.length} nova${toInsert.length !== 1 ? 's' : ''} — serão adicionadas</span>`;
+    html += `<span style="background:#FFF3CD;color:#856404;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:600;"><span style="${BADGE_S}background:#FF9500;color:#fff;">✎</span>${toUpdate.length} alterada${toUpdate.length !== 1 ? 's' : ''} — serão atualizadas</span>`;
+    if (toSkip.length > 0 || removedFromPdf.length > 0) {
+        html += `<span style="color:#999;font-size:11px;">(${toSkip.length} iguais e ${removedFromPdf.length} só na BD não são afetadas)</span>`;
+    }
+    html += '</div>';
+
+    // Tabela — só mostra linhas que serão afetadas pelo import
+    const hasUpdates = toUpdate.length > 0;
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<thead><tr style="background:#E5E5EA;font-weight:600;">';
+    html += '<th style="padding:5px 8px;text-align:left;white-space:nowrap;"></th>';
+    html += '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">ENC.</th>';
+    html += '<th style="padding:5px 8px;text-align:left;">Cliente</th>';
+    html += '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">Data</th>';
+    html += '<th style="padding:5px 8px;text-align:left;">Medida</th>';
+    html += '<th style="padding:5px 8px;text-align:right;white-space:nowrap;">Qtd</th>';
+    if (hasUpdates) html += '<th style="padding:5px 8px;text-align:right;white-space:nowrap;color:#999;">Qtd anterior</th>';
+    html += '</tr></thead><tbody>';
+
+    const BADGE_INSERT = '<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:4px;font-weight:700;font-size:13px;background:#28A745;color:#fff;">+</span>';
+    const BADGE_UPDATE = '<span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:4px;font-weight:700;font-size:13px;background:#FF9500;color:#fff;">✎</span>';
+
+    function row(badge, bg, r, qtd, qtdOld) {
+        return `<tr style="background:${bg};border-bottom:1px solid rgba(0,0,0,0.04);">
+            <td style="padding:5px 8px;">${badge}</td>
+            <td style="padding:5px 8px;white-space:nowrap;">${r.enc || '—'}</td>
+            <td style="padding:5px 8px;">${r.cliente || '—'}</td>
+            <td style="padding:5px 8px;white-space:nowrap;">${r.date || '—'}</td>
+            <td style="padding:5px 8px;">${r.medida || '—'}</td>
+            <td style="padding:5px 8px;text-align:right;font-weight:600;">${qtd}</td>
+            ${hasUpdates ? `<td style="padding:5px 8px;text-align:right;color:#AAA;text-decoration:${qtdOld ? 'line-through' : 'none'};">${qtdOld || ''}</td>` : ''}
+        </tr>`;
+    }
+
+    // Apenas mostrar o que vai ser alterado pelo import
+    toInsert.forEach(r => {
+        html += row(BADGE_INSERT, '#F0FFF4', r, r.qtd || '—', null);
+    });
+    toUpdate.forEach(({ pdfRec, dbRec }) => {
+        html += row(BADGE_UPDATE, '#FFFBF0', pdfRec, pdfRec.qtd || '—', dbRec.qtd || '—');
+    });
+
+    html += '</tbody></table>';
+
+    if (toInsert.length === 0 && toUpdate.length === 0) {
+        html += '<p style="margin-top:12px;text-align:center;color:#34C759;font-weight:600;font-size:13px;">✅ PDF sem diferenças — todos os dados já estão atualizados.</p>';
+    }
+
+    previewEl.innerHTML = html;
 }
 
 // 🔥 v2.51.36i: GLOBAL para onclick funcionar
@@ -5354,155 +5492,134 @@ function parsePdfText(rawText) {
     return orders;
 }
 
-function previewPdfData() {
-    const text = document.getElementById('pdf-text-input').value;
-    if (!text.trim()) {
-        showToast('⚠️ Cole o texto do PDF primeiro', 'warning');
-        return;
-    }
-    
-    const orders = parsePdfText(text);
-    const preview = document.getElementById('pdf-preview');
-    const container = document.getElementById('pdf-preview-container');
-    
-    if (orders.length === 0) {
-        showToast('❌ Nenhuma encomenda detectada. Verifique o formato.', 'error');
-        return;
-    }
-    
-    // Mostrar preview das primeiras 5
-    const previewOrders = orders.slice(0, 5);
-    let html = '<table style="width: 100%; border-collapse: collapse; font-size: 12px;">';
-    html += '<tr style="background: #E5E5EA; font-weight: 600;"><th style="padding: 6px; text-align: left;">Enc</th><th>Cliente</th><th>Data</th><th>Medida</th><th>Qtd</th></tr>';
-    
-    previewOrders.forEach(order => {
-        html += `<tr style="border-bottom: 1px solid #E5E5EA;">
-            <td style="padding: 6px;">${order.enc || '—'}</td>
-            <td style="padding: 6px;">${order.cliente || '—'}</td>
-            <td style="text-align: center;">${order.data_entrega || '—'}</td>
-            <td>${order.medida || '—'}</td>
-            <td style="text-align: center;">${order.qtd !== undefined ? order.qtd : '—'}</td>
-        </tr>`;
-    });
-    
-    html += '</table>';
-    if (orders.length > 5) {
-        html += `<p style="margin-top: 8px; color: #666; font-size: 11px;">...e mais ${orders.length - 5} encomendas</p>`;
-    }
-    
-    preview.innerHTML = html;
-    container.style.display = 'block';
-    showToast(`✅ ${orders.length} encomenda(s) detectada(s)`, 'success');
-}
-
 async function importPdfData() {
-    const orders = window.parsedOrders;
-
-    if (!orders || orders.length === 0) {
-        showToast('⚠️ Nenhuma encomenda carregada. Faça upload do PDF primeiro.', 'warning');
+    if (!window.importDiff) {
+        showToast('⚠️ Faça upload do PDF primeiro.', 'warning');
         return;
     }
 
-    const monthAbbrs = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
-
-    // Converter cada ordem do PDF para o formato da BD e calcular chave única
-    function preparePdfRecord(order) {
-        let dateFormatted = '', monthName = '', yearNum = currentYear, semNum = '';
-        if (order.data_entrega) {
-            const parts = order.data_entrega.split('/');
-            if (parts.length === 3) {
-                const day = parts[0];
-                const monthIdx = parseInt(parts[1]) - 1;
-                yearNum = parseInt(parts[2]);
-                monthName = monthAbbrs[monthIdx] || '';
-                dateFormatted = `${day}/${monthName}`;
-                semNum = getWeekNumberFromDateStr(dateFormatted).toString();
-            }
-        }
-        return {
-            enc: order.enc || '',
-            cliente: order.cliente || '',
-            date: dateFormatted,
-            month: monthName,
-            year: yearNum,
-            sem: semNum,
-            medida: order.medida || '',
-            qtd: order.qtd !== undefined ? order.qtd.toString() : '',
-        };
-    }
-
-    // Chave única: ECL + data + produto
-    const key = r => `${r.enc}|${r.date}|${r.medida}`;
-
-    const pdfRecords = orders.map(preparePdfRecord);
-    const pdfMap = new Map(pdfRecords.map(r => [key(r), r]));
-
-    // Buscar registos existentes para os meses cobertos pelo PDF
-    const monthsInPdf = [...new Set(pdfRecords.map(r => `${r.month}/${r.year}`))];
-    const existingRows = [];
-    for (const my of monthsInPdf) {
-        const [m, y] = my.split('/');
-        const { data } = await db
-            .from('mapa_encomendas')
-            .select('id, enc, date, medida, qtd, cliente, row_order')
-            .eq('month', m)
-            .eq('year', parseInt(y));
-        if (data) existingRows.push(...data);
-    }
-    const dbMap = new Map(existingRows.map(r => [key(r), r]));
-
-    // Calcular diff
-    const toInsert = [], toUpdate = [], toSkip = [], removedFromPdf = [];
-
-    pdfMap.forEach((pdfRec, k) => {
-        if (!dbMap.has(k)) {
-            toInsert.push(pdfRec);
-        } else {
-            const dbRec = dbMap.get(k);
-            if (dbRec.qtd !== pdfRec.qtd || dbRec.cliente !== pdfRec.cliente) {
-                toUpdate.push({ id: dbRec.id, changes: { qtd: pdfRec.qtd, cliente: pdfRec.cliente, sem: pdfRec.sem } });
-            } else {
-                toSkip.push(k);
-            }
-        }
-    });
-    dbMap.forEach((dbRec, k) => {
-        if (!pdfMap.has(k)) removedFromPdf.push(dbRec);
-    });
-
-    // Mostrar diff e pedir confirmação
-    const lines = [];
-    if (toInsert.length)      lines.push(`➕ ${toInsert.length} nova(s) (serão adicionadas)`);
-    if (toUpdate.length)      lines.push(`✏️  ${toUpdate.length} com quantidade/cliente alterados (serão atualizadas)`);
-    if (toSkip.length)        lines.push(`✅ ${toSkip.length} sem alterações (ignoradas)`);
-    if (removedFromPdf.length) lines.push(`⚠️  ${removedFromPdf.length} no sistema já não constam no PDF (não serão eliminadas)`);
+    const { toInsert, toUpdate } = window.importDiff;
 
     if (toInsert.length === 0 && toUpdate.length === 0) {
         showToast('✅ PDF sem diferenças — todos os dados já estão atualizados.', 'success');
         return;
     }
 
-    if (!confirm(`Sincronizar com PDF:\n\n${lines.join('\n')}\n\nContinuar?`)) return;
+    const statusEl = document.getElementById('pdf-status');
+    const BATCH_SIZE = 100; // Supabase payload safety limit
+
+    // Helper: convert "DD/mmm" date to a sort number for chronological ordering
+    const monthIdx = {jan:0,fev:1,mar:2,abr:3,mai:4,jun:5,jul:6,ago:7,set:8,out:9,nov:10,dez:11};
+    function dateToNum(d) {
+        if (!d) return 0;
+        const [day, mon] = d.split('/');
+        return (monthIdx[mon] || 0) * 100 + (parseInt(day) || 0);
+    }
 
     try {
-        // INSERT novas linhas
-        if (toInsert.length > 0) {
-            const { data: maxData } = await db
-                .from('mapa_encomendas').select('row_order')
-                .order('row_order', { ascending: false }).limit(1);
-            let nextRowOrder = (maxData && maxData[0]?.row_order != null) ? maxData[0].row_order + 1 : 1;
-
-            const recordsToInsert = toInsert.map(r => ({
-                ...r, local: '', transp: '', horario_carga: '', row_order: nextRowOrder++
-            }));
-            const { error } = await db.from('mapa_encomendas').insert(recordsToInsert);
-            if (error) throw error;
+        // ── 1. UPDATES (qtd/cliente changed) — parallel, no ordering needed ──
+        if (toUpdate.length > 0) {
+            statusEl.innerHTML = `<span style="color:#FF9500;">✎ Atualizando ${toUpdate.length} linha(s)...</span>`;
+            await Promise.all(toUpdate.map(({ id, changes }) =>
+                db.from('mapa_encomendas').update(changes).eq('id', id)
+            ));
+            // Audit: log each updated row
+            toUpdate.forEach(({ id, changes }) => {
+                logHistory('PDF_UPDATE', {
+                    enc: changes.enc,
+                    date: changes.date,
+                    field_name: 'qtd/cliente',
+                    new_value: JSON.stringify(changes),
+                    details: `PDF re-import update (id=${id})`,
+                });
+            });
         }
 
-        // UPDATE linhas alteradas (só campos do PDF — preserva local/transp/horario/obs)
-        for (const { id, changes } of toUpdate) {
-            const { error } = await db.from('mapa_encomendas').update(changes).eq('id', id);
-            if (error) throw error;
+        // ── 2. INSERTS — with correct date-grouped positioning ──
+        if (toInsert.length > 0) {
+            statusEl.innerHTML = `<span style="color:#007AFF;">⏳ Inserindo ${toInsert.length} nova(s) linha(s)...</span>`;
+
+            // Sort new rows: by date chronologically, then by ENC number within same date
+            // ECL format "ECL 2026/NNN" → extract NNN for numeric sort
+            function encToNum(enc) {
+                const m = (enc || '').match(/(\d+)$/);
+                return m ? parseInt(m[1]) : 0;
+            }
+            const sortedInserts = [...toInsert].sort((a, b) => {
+                const dateDiff = dateToNum(a.date) - dateToNum(b.date);
+                return dateDiff !== 0 ? dateDiff : encToNum(a.enc) - encToNum(b.enc);
+            });
+
+            // Build merged list: existing rows (already sorted by row_order) + new rows in correct position
+            const existing = [...(window.importDiff.existingRows || [])];
+
+            // Group new rows by date
+            const insertsByDate = {};
+            sortedInserts.forEach(r => {
+                (insertsByDate[r.date] = insertsByDate[r.date] || []).push(r);
+            });
+
+            // Insert each date's new rows after the last existing row of that same date,
+            // or in chronological position if that date doesn't exist yet in the DB.
+            const merged = [...existing]; // will be mutated
+            const newDatesSorted = Object.keys(insertsByDate).sort((a, b) => dateToNum(a) - dateToNum(b));
+
+            newDatesSorted.forEach(date => {
+                // Find last index in merged for this date
+                let lastIdx = -1;
+                for (let i = 0; i < merged.length; i++) {
+                    if (merged[i].date === date) lastIdx = i;
+                }
+
+                const rowsToSplice = insertsByDate[date].map(r => ({ ...r, _new: true }));
+
+                if (lastIdx >= 0) {
+                    // Insert right after last existing row of this date
+                    merged.splice(lastIdx + 1, 0, ...rowsToSplice);
+                } else {
+                    // Date not in DB yet — find chronological position
+                    let insertAfter = -1;
+                    for (let i = 0; i < merged.length; i++) {
+                        if (dateToNum(merged[i].date) <= dateToNum(date)) insertAfter = i;
+                    }
+                    merged.splice(insertAfter + 1, 0, ...rowsToSplice);
+                }
+            });
+
+            // Re-number the merged list; collect what changed
+            const toInsertFinal = [];
+            const rowOrderUpdates = []; // existing rows that need a new row_order
+
+            merged.forEach((r, i) => {
+                const newOrder = i + 1;
+                if (r._new) {
+                    const { _new, ...rec } = r;
+                    toInsertFinal.push({ ...rec, local: '', transp: '', horario_carga: '', row_order: newOrder });
+                } else if ((r.row_order || 0) !== newOrder) {
+                    rowOrderUpdates.push({ id: r.id, row_order: newOrder });
+                }
+            });
+
+            // Batch insert new rows (100 at a time)
+            for (let i = 0; i < toInsertFinal.length; i += BATCH_SIZE) {
+                const chunk = toInsertFinal.slice(i, i + BATCH_SIZE);
+                statusEl.innerHTML = `<span style="color:#007AFF;">⏳ Inserindo ${i + chunk.length}/${toInsertFinal.length}...</span>`;
+                const { error } = await db.from('mapa_encomendas').insert(chunk);
+                if (error) throw error;
+            }
+            // Audit: log the import as a single batch entry
+            logHistory('PDF_INSERT', {
+                new_value: `${toInsertFinal.length} linha(s) importadas do PDF`,
+                details: JSON.stringify(toInsertFinal.map(r => ({ enc: r.enc, date: r.date, medida: r.medida, qtd: r.qtd, cliente: r.cliente }))),
+            });
+
+            // Update shifted row_orders in parallel (only rows whose position changed)
+            if (rowOrderUpdates.length > 0) {
+                statusEl.innerHTML = `<span style="color:#007AFF;">⏳ Reordenando ${rowOrderUpdates.length} linha(s) existentes...</span>`;
+                await Promise.all(rowOrderUpdates.map(({ id, row_order }) =>
+                    db.from('mapa_encomendas').update({ row_order }).eq('id', id)
+                ));
+            }
         }
 
         const summary = [
@@ -5511,12 +5628,14 @@ async function importPdfData() {
         ].filter(Boolean).join(', ');
 
         showToast(`✅ ${summary}`, 'success');
+        window.importDiff = null;
         closePdfImporter();
         await loadEncomendasData();
         renderEncomendasGrid();
 
     } catch (err) {
         console.error('Erro ao importar PDF:', err);
+        statusEl.innerHTML = `<span style="color:#FF3B30;">❌ Erro: ${err.message}</span>`;
         showToast('❌ Erro ao importar dados: ' + err.message, 'error');
     }
 }
@@ -5553,8 +5672,8 @@ async function renderResumoCargas() {
                     data: data,
                     horario_carga: encomendasData.data[horarioKey] || '',
                     transp: transp,
-                    // Usar sem do DB — consistente com renderCalendarioSemanal
-                    sem: parseInt(encomendasData.data[`${i}_sem`]) || 0
+                    // Usar sem do DB; calcular a partir da data se em falta
+                    sem: (function() { const s = encomendasData.data[`${i}_sem`]; return (s && s !== '') ? parseInt(s) : getWeekNumberFromDateStr(data); })()
                 });
             }
         }
@@ -5811,10 +5930,11 @@ window.openCargasDetalhe = function(dateKey) {
                     slots = ['12:00 - 14:00'];
                     rowSpan = 4;
                 } else {
-                    slots = [horarioNormalizado];
+                    const knownSlots = ['06:00 - 08:00','08:00 - 10:00','10:00 - 12:00','12:00 - 14:00','14:00 - 16:00','16:00 - 18:00','18:00 - 20:00'];
+                    slots = knownSlots.includes(horarioNormalizado) ? [horarioNormalizado] : ['SEM_HORARIO'];
                     rowSpan = 1;
                 }
-                
+
                 cargas.push({
                     index: i,
                     date: normalizedDate,
@@ -5904,7 +6024,8 @@ window.openCargasDetalhe = function(dateKey) {
     
     const headerDay = document.createElement('div');
     headerDay.className = 'calendario-header-cell';
-    headerDay.innerHTML = `<div style="font-weight:700;">${dayName}</div><div style="font-size:12px;color:#666;margin-top:4px;">${dateKey}</div>`;
+    const totalBadgeModal = `<span style="display:inline-block;background:#007AFF;color:white;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:6px;">${cargas.length}</span>`;
+    headerDay.innerHTML = `<div style="font-weight:700;">${dayName}${totalBadgeModal}</div><div style="font-size:12px;color:#666;margin-top:4px;">${dateKey}</div>`;
     grid.appendChild(headerDay);
     
     // Rastrear células ocupadas
@@ -6036,10 +6157,19 @@ window.openCargasDetalhe = function(dateKey) {
             
             dayCell.appendChild(event);
         });
-        
+
+        // Badge de contagem sempre visível no canto superior direito da célula
+        if (cargasNesteSlot.length > 0) {
+            dayCell.style.position = 'relative';
+            const countBadge = document.createElement('div');
+            countBadge.style.cssText = 'position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.6);color:white;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;z-index:30;pointer-events:none;';
+            countBadge.textContent = cargasNesteSlot.length;
+            dayCell.appendChild(countBadge);
+        }
+
         grid.appendChild(dayCell);
     });
-    
+
     content.innerHTML = '';
     content.appendChild(grid);
     
