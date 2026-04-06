@@ -1139,6 +1139,7 @@
             flex: 1;
             overflow-y: auto;
             padding: 32px;
+            position: relative;
         }
         
         .modal-header {
@@ -1158,10 +1159,10 @@
         
         .modal-close {
             position: absolute;
-            top: 20px;
-            right: 20px;
-            width: 32px;
-            height: 32px;
+            top: 16px;
+            right: 16px;
+            width: 36px;
+            height: 36px;
             border: none;
             background: #F5F5F7;
             border-radius: 50%;
@@ -1170,8 +1171,12 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            z-index: 10;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
         .modal-close:hover { background: #E5E5EA; }
+        .modal-close:active { background: #D1D1D6; transform: scale(0.92); }
         
         .modal-section {
             margin-bottom: 28px;
@@ -2065,7 +2070,7 @@
             .app-header { padding: 16px; }
             .gantt-section, .dashboard-section { padding: 16px; }
             .gantt-grid { font-size: 12px; }
-            
+
             /* 📱 Mobile: Layout otimizado - TODAS as 7 estufas visíveis */
             .dashboard-grid {
                 display: flex;
@@ -2074,7 +2079,7 @@
                 padding: 16px;
                 min-height: auto;
             }
-            
+
             /* Resetar posicionamento grid no mobile */
             .dashboard-grid .estufa-card[data-estufa="1"],
             .dashboard-grid .estufa-card[data-estufa="2"],
@@ -2088,15 +2093,71 @@
                 min-width: 100%;
                 min-height: auto;
             }
-            
+
             /* Esconder workspace e labels no mobile */
             .factory-workspace,
             .factory-label {
                 display: none !important;
             }
-            .modal-dialog { max-width: 100%; margin: 0; border-radius: 20px 20px 0 0; }
+
+            /* 📱 Modal como bottom sheet no mobile */
+            .modal.active {
+                align-items: flex-end;
+                justify-content: stretch;
+                padding: 0;
+            }
+            .modal-dialog {
+                max-width: 100% !important;
+                width: 100%;
+                margin: 0;
+                border-radius: 20px 20px 0 0;
+                max-height: 92vh;
+                /* Safe area para iPhone com home bar */
+                padding-bottom: env(safe-area-inset-bottom, 0px);
+            }
+            .modal-body {
+                padding: 24px 20px;
+                /* Evitar que conteúdo fique atrás da home bar */
+                padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+            }
+            /* Botão fechar maior e mais acessível no mobile */
+            .modal-close {
+                width: 44px;
+                height: 44px;
+                font-size: 22px;
+                top: 14px;
+                right: 14px;
+                background: rgba(0,0,0,0.08);
+            }
+            /* Drag handle visual acima do modal bottom sheet */
+            .modal-dialog::before {
+                content: '';
+                display: block;
+                width: 36px;
+                height: 4px;
+                background: rgba(0,0,0,0.15);
+                border-radius: 2px;
+                margin: 10px auto 0;
+                flex-shrink: 0;
+            }
+            /* Sidebar mais estreita no mobile */
+            .modal-sidebar { width: 44px; }
+
             .form-row, .cargo-row { grid-template-columns: 1fr; }
-            
+
+            /* Inputs maiores para touch */
+            .form-input, select.form-input {
+                font-size: 16px !important; /* Evita zoom automático no iOS */
+                padding: 12px 14px;
+                min-height: 44px;
+            }
+
+            /* Botões com área de toque mínima */
+            .btn, .btn-primary, .btn-secondary, .btn-danger {
+                min-height: 44px;
+                font-size: 15px;
+            }
+
             /* 🔥 v2.51.24: Melhorar tabs mobile */
             .tabs-container {
                 padding: 8px 16px 0;
@@ -2104,33 +2165,40 @@
                 overflow-x: auto;
                 -webkit-overflow-scrolling: touch;
             }
-            
             .tab-btn {
                 padding: 8px 12px;
                 font-size: 12px;
                 white-space: nowrap;
                 min-width: auto;
+                min-height: 40px;
             }
-            
             .tab-badge {
                 font-size: 10px;
                 padding: 2px 6px;
             }
-            
+
             /* Calendário mobile: scroll horizontal suave */
             .calendario-grid {
                 font-size: 11px;
                 grid-template-columns: 100px repeat(3, minmax(150px, 1fr));
             }
-            
             .calendario-event {
                 padding: 8px 10px;
                 font-size: 11px;
             }
-            
             .calendario-header-cell {
                 padding: 12px 8px;
                 font-size: 12px;
+            }
+
+            /* Footer do modal em coluna no mobile */
+            .modal-footer {
+                flex-direction: column;
+                gap: 10px;
+            }
+            .modal-footer .btn {
+                width: 100%;
+                justify-content: center;
             }
         }
     </style>
