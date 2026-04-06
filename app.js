@@ -66,7 +66,6 @@ function getUserColor(userId) {
 // ===================================================================
 let currentWeek = null; // Semana ativa (ex: "9", "10", "11"...)
 let weekTabs = []; // Array de semanas do mês atual
-let currentGanttDate = new Date(); // Âncora de navegação do Gantt (planeamento)
 
 // ===================================================================
 // UTILS - Detectar conflitos de horário
