@@ -66,6 +66,7 @@ function getUserColor(userId) {
 // ===================================================================
 let currentWeek = null; // Semana ativa (ex: "9", "10", "11"...)
 let weekTabs = []; // Array de semanas do mês atual
+let currentGanttDate = new Date(); // Âncora de navegação do Gantt (planeamento)
 
 // ===================================================================
 // UTILS - Detectar conflitos de horário
@@ -653,16 +654,18 @@ function renderGantt() {
     
     const today = new Date();
     today.setHours(0,0,0,0);
-    const startDate = new Date(today);
+    const anchor = new Date(currentGanttDate);
+    anchor.setHours(0,0,0,0);
+    const startDate = new Date(anchor);
     startDate.setDate(startDate.getDate() - 2);
-    
+
     const days = [];
     for (let i = 0; i < 10; i++) {
         const d = new Date(startDate);
         d.setDate(d.getDate() + i);
         days.push(d);
     }
-    
+
     // Update date range
     const firstDay = formatDate(days[0]);
     const lastDay = formatDate(days[9]);
