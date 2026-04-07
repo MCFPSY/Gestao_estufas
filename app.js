@@ -5477,26 +5477,29 @@ function parsePdfText(rawText) {
         return parseInt(t.split('.')[0]);
     }
 
-    // 1. Mapear código de cliente → nome, a partir dos cabeçalhos de secção do PDF
-    // Formato real: linha com só "C####" seguida de linha com nome da empresa
-    // A regex anterior usava [A-Z] apenas ASCII — falha em nomes com acentos (ALSÉCUS, PAPÉIS, etc.)
+    // 1. Mapear código de cliente → nome
+    // PDF.js concatena texto com espaços (sem \n), por isso o nome aparece inline antes de qty.
+    // Formato: [NOME] qty qty qty UN qty C#### DD/MM/YYYY ECL ...
+    // Usa \u00C0-\u00FF para cobrir letras acentuadas portuguesas (ALSÉCUS, PAPÉIS, etc.)
     const clientMap = {};
-    const sectionBounds = []; // { code, pos } para filtrar ECLs por secção
-    const sectionRegex = /(?:^|[\n\r])(C\d{4,5})[\n\r]([^\n\r]+)/g;
-    while ((m = sectionRegex.exec(text)) !== null) {
-        const code = m[1];
-        const nameCandidate = m[2].trim();
-        // Validar: nome de empresa não começa com ECL, código de produto, número ou "Total"
-        if (!/^(ECL|P\d|#\d|\d|Total|TOTAL)/.test(nameCandidate) && nameCandidate.length >= 5) {
-            if (!clientMap[code]) {
-                clientMap[code] = nameCandidate;
-                sectionBounds.push({ code, pos: m.index + m[0].indexOf(m[1]) });
-                console.log(`👤 Cliente: ${code} → ${nameCandidate}`);
-            }
+    const sectionBounds = [];
+    const CLIENT_CHAR = '[A-Z\u00C0-\u00FF]';
+    const CLIENT_BODY = '[A-Z\u00C0-\u00FF\\s,\\.\\-&\'\\/]{8,}?';
+    const clientRegex = new RegExp(
+        `(${CLIENT_CHAR}${CLIENT_BODY})\\s+[\\d.,]+\\s+[\\d.,]+\\s+[\\d.,]+\\s+UN\\s+[\\d.,]+\\s+(C\\d{4,5})\\s+\\d{2}\\/\\d{2}\\/\\d{4}\\s+ECL`,
+        'g'
+    );
+    while ((m = clientRegex.exec(text)) !== null) {
+        const clientCode = m[2];
+        if (!clientMap[clientCode]) {
+            clientMap[clientCode] = m[1].trim();
+            // Posição da secção: última ocorrência do código antes do match
+            const codePos = text.lastIndexOf(clientCode, m.index);
+            sectionBounds.push({ code: clientCode, pos: codePos >= 0 ? codePos : m.index });
+            console.log(`👤 Cliente: ${clientCode} → ${clientMap[clientCode]}`);
         }
     }
     sectionBounds.sort((a, b) => a.pos - b.pos);
-    // Retorna o código da secção (C####) onde uma posição de texto cai
     function getSectionCode(pos) {
         let code = null;
         for (const s of sectionBounds) {
