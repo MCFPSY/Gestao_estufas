@@ -5477,17 +5477,32 @@ function parsePdfText(rawText) {
         return parseInt(t.split('.')[0]);
     }
 
-    // 1. Mapear código de cliente → nome
-    // Formato real: [nome empresa] [qty] [qty] [qty] UN [qty] C#### DD/MM/YYYY ECL ...
-    // O nome aparece como bloco de texto maiúsculo antes da primeira linha ECL do cliente.
+    // 1. Mapear código de cliente → nome, a partir dos cabeçalhos de secção do PDF
+    // Formato real: linha com só "C####" seguida de linha com nome da empresa
+    // A regex anterior usava [A-Z] apenas ASCII — falha em nomes com acentos (ALSÉCUS, PAPÉIS, etc.)
     const clientMap = {};
-    const clientRegex = /([A-Z][A-Z\s,\.\-]{12,}?)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+UN\s+[\d.,]+\s+(C\d{4,5})\s+\d{2}\/\d{2}\/\d{4}\s+ECL/g;
-    while ((m = clientRegex.exec(text)) !== null) {
-        const clientCode = m[2];
-        if (!clientMap[clientCode]) {
-            clientMap[clientCode] = m[1].trim();
-            console.log(`👤 Cliente: ${clientCode} → ${clientMap[clientCode]}`);
+    const sectionBounds = []; // { code, pos } para filtrar ECLs por secção
+    const sectionRegex = /(?:^|[\n\r])(C\d{4,5})[\n\r]([^\n\r]+)/g;
+    while ((m = sectionRegex.exec(text)) !== null) {
+        const code = m[1];
+        const nameCandidate = m[2].trim();
+        // Validar: nome de empresa não começa com ECL, código de produto, número ou "Total"
+        if (!/^(ECL|P\d|#\d|\d|Total|TOTAL)/.test(nameCandidate) && nameCandidate.length >= 5) {
+            if (!clientMap[code]) {
+                clientMap[code] = nameCandidate;
+                sectionBounds.push({ code, pos: m.index + m[0].indexOf(m[1]) });
+                console.log(`👤 Cliente: ${code} → ${nameCandidate}`);
+            }
         }
+    }
+    sectionBounds.sort((a, b) => a.pos - b.pos);
+    // Retorna o código da secção (C####) onde uma posição de texto cai
+    function getSectionCode(pos) {
+        let code = null;
+        for (const s of sectionBounds) {
+            if (s.pos <= pos) code = s.code; else break;
+        }
+        return code;
     }
 
     // 2. Encontrar todos os documentos ECL com posição no texto
@@ -5522,9 +5537,16 @@ function parsePdfText(rawText) {
     console.log(`✅ ${prodMatches.length} produtos encontrados`);
 
     // 4. Associar documentos ao produto seguinte
+    // Filtrar por secção de cliente: evita que ECLs de SERV_TRANSP (ou outras linhas residuais)
+    // de um cliente contaminem os produtos do cliente seguinte.
     prodMatches.forEach((prod, pi) => {
         const prevEnd = pi > 0 ? prodMatches[pi - 1].end : 0;
-        const relatedEcls = eclMatches.filter(e => e.pos >= prevEnd && e.pos < prod.pos);
+        const prodSection = getSectionCode(prod.pos);
+        const relatedEcls = eclMatches.filter(e =>
+            e.pos >= prevEnd &&
+            e.pos < prod.pos &&
+            (prodSection === null || e.clientCode === prodSection)
+        );
 
         relatedEcls.forEach(ecl => {
             const cliente = clientMap[ecl.clientCode] || ecl.clientCode;
@@ -5632,24 +5654,22 @@ async function importPdfData() {
             const newDatesSorted = Object.keys(insertsByDate).sort((a, b) => dateToNum(a) - dateToNum(b));
 
             newDatesSorted.forEach(date => {
-                // Find last index in merged for this date
-                let lastIdx = -1;
-                for (let i = 0; i < merged.length; i++) {
-                    if (merged[i].date === date) lastIdx = i;
-                }
-
                 const rowsToSplice = insertsByDate[date].map(r => ({ ...r, _new: true }));
-
-                if (lastIdx >= 0) {
-                    // Insert right after last existing row of this date
-                    merged.splice(lastIdx + 1, 0, ...rowsToSplice);
+                // Inserir no INÍCIO do bloco do dia (antes das linhas existentes desse dia)
+                const firstIdx = merged.findIndex(r => r.date === date);
+                if (firstIdx >= 0) {
+                    // Data já existe na BD — inserir antes da primeira linha desse dia
+                    merged.splice(firstIdx, 0, ...rowsToSplice);
                 } else {
-                    // Date not in DB yet — find chronological position
-                    let insertAfter = -1;
+                    // Data nova — inserir antes da primeira linha com data posterior
+                    let insertBefore = merged.length;
                     for (let i = 0; i < merged.length; i++) {
-                        if (dateToNum(merged[i].date) <= dateToNum(date)) insertAfter = i;
+                        if (dateToNum(merged[i].date) > dateToNum(date)) {
+                            insertBefore = i;
+                            break;
+                        }
                     }
-                    merged.splice(insertAfter + 1, 0, ...rowsToSplice);
+                    merged.splice(insertBefore, 0, ...rowsToSplice);
                 }
             });
 
