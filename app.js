@@ -5527,8 +5527,10 @@ function parsePdfText(rawText) {
     // 3. Encontrar todos os produtos com posição no texto
     // Formato: [code]  [desc]  [qty_total]  [qty_entregue]  [qty_restante] UN
     // Códigos P começam SEMPRE com dígito após P (P0...). Códigos # são só dígitos.
+    // Códigos Navigator: numéricos com ponto — ex. 573392.2585 (6 dígitos + ponto + 4 dígitos exatos)
+    // Os 4 dígitos finais distinguem de quantidades (ex. 16.308,000 tem vírgula a seguir)
     const prodMatches = [];
-    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,})\s+(.+?)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+(?:UN|VP)/g;
+    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,}|\d{5,9}\.\d{4}(?!\d))\s+(.+?)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+(?:UN|VP)/g;
     while ((m = prodRegex.exec(text)) !== null) {
         prodMatches.push({
             pos: m.index,
