@@ -3019,6 +3019,9 @@ function renderEncomendasGrid() {
     
     // 🆕 v2.52.0: Handler para copy/paste de Excel
     setupExcelPasteHandler();
+
+    // 📊 Seleção de células estilo Excel com somatório
+    setupCellSelection(table);
     
     // 🔐 v2.52.0: Aplicar permissões no grid de encomendas
     if (!canEdit('encomendas')) {
@@ -3061,6 +3064,98 @@ function renderEncomendasGrid() {
             `;
         }
     }
+}
+
+// 📊 Seleção de células estilo Excel com somatório na status bar
+function setupCellSelection(table) {
+    let isSelecting = false;
+    let startCell = null;
+    let selectedCells = new Set();
+
+    // Status bar (cria uma vez, reutiliza)
+    let statusBar = document.getElementById('excel-selection-status');
+    if (!statusBar) {
+        statusBar = document.createElement('div');
+        statusBar.id = 'excel-selection-status';
+        statusBar.style.cssText = 'position:fixed;bottom:16px;right:20px;background:rgba(0,0,0,0.75);color:#fff;font-size:12px;padding:6px 14px;border-radius:8px;z-index:9999;display:none;pointer-events:none;font-family:inherit;';
+        document.body.appendChild(statusBar);
+    }
+
+    function getCellCoords(cell) {
+        return {
+            row: parseInt(cell.getAttribute('data-row-index')),
+            col: encomendasData.fields.findIndex(f => f.key === cell.getAttribute('data-field'))
+        };
+    }
+
+    function getCellsInRange(a, b) {
+        const minRow = Math.min(a.row, b.row), maxRow = Math.max(a.row, b.row);
+        const minCol = Math.min(a.col, b.col), maxCol = Math.max(a.col, b.col);
+        return table.querySelectorAll('.excel-cell:not([contenteditable="false"]),[data-field]')
+            ? [...table.querySelectorAll('.excel-cell')].filter(c => {
+                const r = parseInt(c.getAttribute('data-row-index'));
+                const col = encomendasData.fields.findIndex(f => f.key === c.getAttribute('data-field'));
+                return r >= minRow && r <= maxRow && col >= minCol && col <= maxCol;
+            })
+            : [];
+    }
+
+    function clearSelection() {
+        selectedCells.forEach(c => c.style.removeProperty('box-shadow'));
+        selectedCells.clear();
+        statusBar.style.display = 'none';
+    }
+
+    function applySelection(cells) {
+        clearSelection();
+        cells.forEach(c => {
+            c.style.boxShadow = 'inset 0 0 0 2px #007AFF';
+            selectedCells.add(c);
+        });
+        // Calcular somatório e contagem
+        let sum = 0, numCount = 0, total = cells.length;
+        cells.forEach(c => {
+            const v = parseFloat((c.textContent || '').replace(/\./g, '').replace(',', '.'));
+            if (!isNaN(v)) { sum += v; numCount++; }
+        });
+        if (total > 1) {
+            let msg = `${total} células`;
+            if (numCount > 0) msg += ` · Soma: ${Math.round(sum).toLocaleString('pt-PT')}`;
+            statusBar.textContent = msg;
+            statusBar.style.display = 'block';
+        } else {
+            statusBar.style.display = 'none';
+        }
+    }
+
+    table.addEventListener('mousedown', e => {
+        const cell = e.target.closest('.excel-cell');
+        if (!cell) return;
+        // Only start drag-select on left click without Ctrl (Ctrl+click lets normal focus work)
+        if (e.button !== 0) return;
+        isSelecting = true;
+        startCell = cell;
+        clearSelection();
+        // Don't prevent default so cell still gets focus/click for editing
+    });
+
+    table.addEventListener('mousemove', e => {
+        if (!isSelecting || !startCell) return;
+        const cell = e.target.closest('.excel-cell');
+        if (!cell) return;
+        const a = getCellCoords(startCell), b = getCellCoords(cell);
+        if (a.row === b.row && a.col === b.col) { clearSelection(); return; }
+        applySelection(getCellsInRange(a, b));
+    });
+
+    document.addEventListener('mouseup', () => {
+        isSelecting = false;
+    });
+
+    // Clear selection when clicking outside the table
+    document.addEventListener('mousedown', e => {
+        if (!e.target.closest('#encomendas-grid')) clearSelection();
+    }, true);
 }
 
 // Carregar dados do mês da BD
@@ -5469,12 +5564,12 @@ function parsePdfText(rawText) {
     const orders = [];
     let m;
 
-    // Helper: parse quantidade suportando tanto "50,000" (vírgula=decimal) como "126.000" / "3,348.000"
+    // Helper: parse quantidade em formato português (ponto=milhar, vírgula=decimal)
+    // Ex: "1.620,000" → 1620 | "494,000" → 494 | "16.308,000" → 16308 | "26,000" → 26
     function parseQtd(s) {
         const t = s.trim();
-        if (t.includes(',') && t.includes('.')) return parseInt(t.replace(/,/g, '').split('.')[0]);
-        if (t.includes(',')) return parseInt(t.split(',')[0]);
-        return parseInt(t.split('.')[0]);
+        // Remove pontos de milhar, depois descarta parte decimal (após vírgula)
+        return parseInt(t.replace(/\./g, '').split(',')[0]) || 0;
     }
 
     // 1. Mapear código de cliente → nome
@@ -5486,7 +5581,7 @@ function parsePdfText(rawText) {
     const CLIENT_CHAR = '[A-Z\u00C0-\u00FF]';
     const CLIENT_BODY = '[A-Z\u00C0-\u00FF\\s,\\.\\-&\'\\/]{8,}?';
     const clientRegex = new RegExp(
-        `(${CLIENT_CHAR}${CLIENT_BODY})\\s+[\\d.,]+\\s+[\\d.,]+\\s+[\\d.,]+\\s+UN\\s+[\\d.,]+\\s+(C\\d{4,5})\\s+\\d{2}\\/\\d{2}\\/\\d{4}\\s+ECL`,
+        `(${CLIENT_CHAR}${CLIENT_BODY})\\s+[\\d.,]+\\s+[\\d.,]+\\s+[\\d.,]+\\s+UN\\s+[\\d.,]+\\s+(C\\d{4,5}(?:\\s+[A-Z]{2,3})?)\\s+\\d{2}\\/\\d{2}\\/\\d{4}\\s+ECL`,
         'g'
     );
     while ((m = clientRegex.exec(text)) !== null) {
@@ -5511,7 +5606,7 @@ function parsePdfText(rawText) {
     // 2. Encontrar todos os documentos ECL com posição no texto
     // Formato real do PDF: [qty] UN [qty] [client] [date] ECL YYYY/NNN
     const eclMatches = [];
-    const eclRegex = /([\d.,]+)\s+(C\d{4,5})\s+(\d{2}\/\d{2}\/\d{4})\s+(ECL\s+\d{4}\/\d+)/g;
+    const eclRegex = /([\d.,]+)\s+(C\d{4,5}(?:\s+[A-Z]{2,3})?)\s+(\d{2}\/\d{2}\/\d{4})\s+(ECL\s+\d{4}\/\d+)/g;
     while ((m = eclRegex.exec(text)) !== null) {
         eclMatches.push({
             pos: m.index,
@@ -5530,7 +5625,7 @@ function parsePdfText(rawText) {
     // Códigos Navigator: numéricos com ponto — ex. 573392.2585 (6 dígitos + ponto + 4 dígitos exatos)
     // Os 4 dígitos finais distinguem de quantidades (ex. 16.308,000 tem vírgula a seguir)
     const prodMatches = [];
-    const prodRegex = /(P\d[A-Z0-9\-]{3,}|#\d{4,}|\d{5,9}\.\d{4}(?!\d))\s+(.+?)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+(?:UN|VP)/g;
+    const prodRegex = /(P\d[A-Z0-9\-]{3,}|P-[A-Z0-9\-]{3,}|#\d{4,}|\d{5,9}\.\d{4}(?!\d))\s+(.+?)\s+[\d.,]+\s+[\d.,]+\s+[\d.,]+\s+(?:UN|VP)/g;
     while ((m = prodRegex.exec(text)) !== null) {
         prodMatches.push({
             pos: m.index,
