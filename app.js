@@ -1959,19 +1959,30 @@ function generateWeekTabs() {
     
     weekTabs = Array.from(weeks).sort((a, b) => a - b);
     
-    // 🔥 FEATURE v2.51.15: Selecionar semana ATUAL (data de hoje) ao invés da primeira
-    if (!currentWeek && weekTabs.length > 0) {
-        const today = new Date();
-        const currentWeekNumber = getWeekNumber(today);
-        
-        // Se semana atual existe nas tabs, selecionar ela
-        if (weekTabs.includes(currentWeekNumber)) {
-            currentWeek = currentWeekNumber;
-            console.log(`📅 Semana ATUAL selecionada automaticamente: Semana ${currentWeek}`);
+    // 🔥 BUGFIX v2.52.0: SEMPRE revalidar currentWeek ao gerar tabs
+    // Corrige bug crítico: ao mudar de mês, currentWeek ficava com valor do mês anterior
+    // (ex: semana 15 de Abril) que não existe no novo mês (ex: Maio tem semanas 18-22),
+    // causando filtro que esconde TODOS os dados do mês.
+    if (weekTabs.length > 0) {
+        // Se currentWeek já é válida para este mês, manter
+        if (currentWeek && weekTabs.includes(currentWeek)) {
+            console.log(`📅 Semana ${currentWeek} mantida (válida para este mês)`);
         } else {
-            // Fallback: semana mais próxima (primeira disponível)
-            currentWeek = weekTabs[0];
-            console.log(`⚠️ Semana atual (${currentWeekNumber}) não encontrada. Usando primeira: Semana ${currentWeek}`);
+            const today = new Date();
+            const currentWeekNumber = getWeekNumber(today);
+
+            // Se semana atual existe nas tabs, selecionar ela
+            if (weekTabs.includes(currentWeekNumber)) {
+                currentWeek = currentWeekNumber;
+                console.log(`📅 Semana ATUAL selecionada automaticamente: Semana ${currentWeek}`);
+            } else {
+                // Fallback: semana mais próxima da atual
+                const closest = weekTabs.reduce((prev, curr) =>
+                    Math.abs(curr - currentWeekNumber) < Math.abs(prev - currentWeekNumber) ? curr : prev
+                );
+                currentWeek = closest;
+                console.log(`⚠️ Semana atual (${currentWeekNumber}) não encontrada. Usando mais próxima: Semana ${currentWeek}`);
+            }
         }
     }
     
@@ -3198,25 +3209,25 @@ async function loadEncomendasData() {
         
         if (data && data.length > 0) {
             console.log(`✅ Carregados ${data.length} registros da BD`);
-            
+
             // Ordenar por row_order
             data.sort((a, b) => a.row_order - b.row_order);
-            
+
             // Reconstruir dates e data
             encomendasData.dates = [];
             encomendasData.data = {};
-            
+
             data.forEach((row) => {
                 // 🔥 BUGFIX v2.51.1: Usar row.row_order (índice original da BD) em vez de rowIndex (índice do array filtrado)
                 const originalIndex = row.row_order;
-                
+
                 // Expandir array se necessário (caso haja gaps nos row_order)
                 while (encomendasData.dates.length <= originalIndex) {
                     encomendasData.dates.push('');
                 }
-                
+
                 encomendasData.dates[originalIndex] = row.date;
-                
+
                 // Carregar dados das células usando o ÍNDICE ORIGINAL
                 encomendasData.fields.forEach(field => {
                     const cellKey = `${originalIndex}_${field.key}`;
@@ -3225,6 +3236,86 @@ async function loadEncomendasData() {
                     }
                 });
             });
+
+            // 🔥 BUGFIX v2.52.0: Verificar se o mês está completo (todos os dias úteis presentes)
+            // Se o mês só tem dados parciais (ex: apenas dados de import PDF), fazer merge com pré-população
+            const existingDatesSet = new Set(encomendasData.dates.filter(d => d && d.trim()));
+            const monthIndex = {
+                'jan': 0, 'fev': 1, 'mar': 2, 'abr': 3, 'mai': 4, 'jun': 5,
+                'jul': 6, 'ago': 7, 'set': 8, 'out': 9, 'nov': 10, 'dez': 11
+            }[currentMonth];
+            const firstDay = new Date(currentYear, monthIndex, 1);
+            const lastDay = new Date(currentYear, monthIndex + 1, 0);
+            const expectedDates = new Set();
+            for (let d = new Date(firstDay); d <= lastDay; d.setDate(d.getDate() + 1)) {
+                const dow = d.getDay();
+                if (dow >= 1 && dow <= 6) { // Seg-Sáb
+                    expectedDates.add(`${String(d.getDate()).padStart(2, '0')}/${currentMonth}`);
+                }
+            }
+            const missingDates = [...expectedDates].filter(d => !existingDatesSet.has(d));
+
+            if (missingDates.length > 0) {
+                console.warn(`⚠️ Mês incompleto: ${missingDates.length} dia(s) em falta. A preencher dias vazios...`);
+                console.log('   Dias em falta:', missingDates.sort().join(', '));
+
+                // Para cada dia em falta, adicionar linhas vazias (20 para dia útil, 5 para sábado)
+                // Inserir na posição correcta (ordenado cronologicamente)
+                const monthIdx = { jan:0,fev:1,mar:2,abr:3,mai:4,jun:5,jul:6,ago:7,set:8,out:9,nov:10,dez:11 };
+                function dateToSortNum(dateStr) {
+                    const [dd] = dateStr.split('/');
+                    return parseInt(dd) || 0;
+                }
+
+                // Ordenar dias em falta cronologicamente
+                missingDates.sort((a, b) => dateToSortNum(a) - dateToSortNum(b));
+
+                for (const missDate of missingDates) {
+                    const dayNum = parseInt(missDate.split('/')[0]);
+                    const dateObj = new Date(currentYear, monthIndex, dayNum);
+                    const dow = dateObj.getDay();
+                    const numLines = dow === 6 ? 5 : 20; // Sáb=5, Seg-Sex=20
+                    const weekNum = getWeekNumber(dateObj);
+
+                    // Encontrar posição de inserção (depois do último dia anterior)
+                    let insertPos = encomendasData.dates.length;
+                    for (let i = 0; i < encomendasData.dates.length; i++) {
+                        if (encomendasData.dates[i] && dateToSortNum(encomendasData.dates[i]) > dayNum) {
+                            insertPos = i;
+                            break;
+                        }
+                    }
+
+                    // Inserir linhas no meio do array
+                    const newDates = new Array(numLines).fill(missDate);
+                    encomendasData.dates.splice(insertPos, 0, ...newDates);
+
+                    // Recalcular as keys dos dados (shift indices para a frente)
+                    const newData = {};
+                    Object.keys(encomendasData.data).forEach(key => {
+                        const [idxStr, ...fieldParts] = key.split('_');
+                        const idx = parseInt(idxStr);
+                        const fieldKey = fieldParts.join('_');
+                        if (idx >= insertPos) {
+                            newData[`${idx + numLines}_${fieldKey}`] = encomendasData.data[key];
+                        } else {
+                            newData[key] = encomendasData.data[key];
+                        }
+                    });
+
+                    // Adicionar SEM para as novas linhas
+                    for (let i = 0; i < numLines; i++) {
+                        newData[`${insertPos + i}_sem`] = weekNum.toString();
+                    }
+
+                    encomendasData.data = newData;
+                }
+
+                console.log(`✅ Mês completado: ${encomendasData.dates.length} linhas total`);
+
+                // Salvar estrutura completada na BD
+                await saveAllRows();
+            }
         } else {
             console.log('📅 Mês vazio. Pré-populando com estrutura completa...');
             
@@ -3512,52 +3603,85 @@ function updatePendingChangesIndicator() {
 }
 
 // Salvar todas as linhas (usado em operações que afetam múltiplas linhas)
+// 🔥 BUGFIX v2.52.0: Proteger contra race conditions — capturar mês/ano e dados NO INÍCIO
+// para que mudanças de mês durante a operação async não causem perda de dados
 async function saveAllRows() {
-    console.log('💾 Salvando todas as linhas...');
-    
+    // 📸 SNAPSHOT: Capturar estado AGORA, antes de qualquer await
+    const snapMonth = currentMonth;
+    const snapYear = currentYear;
+    const snapDates = [...encomendasData.dates];  // Cópia profunda do array
+    const snapData = { ...encomendasData.data };  // Cópia do objeto de dados
+    const snapFields = encomendasData.fields;
+
+    console.log(`💾 Salvando todas as linhas para ${snapMonth}/${snapYear} (${snapDates.length} linhas)...`);
+
+    // Validação de segurança: não apagar se os dados estão vazios/inconsistentes
+    if (snapDates.length === 0) {
+        console.error('🛡️ ABORTADO: encomendasData.dates está vazio! Não vou apagar dados da BD.');
+        return;
+    }
+
+    // Validação: verificar se temos datas válidas (não apenas strings vazias)
+    const validDates = snapDates.filter(d => d && d.trim());
+    if (validDates.length === 0) {
+        console.error('🛡️ ABORTADO: Todas as datas estão vazias! Não vou apagar dados da BD.');
+        return;
+    }
+
     try {
-        // 1. Apagar todas as linhas do mês atual
-        const { error: deleteError } = await db
-            .from('mapa_encomendas')
-            .delete()
-            .eq('month', currentMonth)
-            .eq('year', currentYear);
-        
-        if (deleteError) {
-            console.warn('⚠️ Erro ao deletar:', deleteError);
-        }
-        
-        // 2. Preparar todas as linhas para inserir
-        const rows = encomendasData.dates.map((date, index) => {
+        // 1. Preparar todas as linhas PRIMEIRO (antes de apagar)
+        const rows = snapDates.map((date, index) => {
             const row = {
-                month: currentMonth,
-                year: currentYear,
+                month: snapMonth,     // Usar snapshot, NÃO currentMonth
+                year: snapYear,       // Usar snapshot, NÃO currentYear
                 date: date,
                 row_order: index
             };
-            
+
             // Coletar dados de todas as células da linha
-            encomendasData.fields.forEach(field => {
+            snapFields.forEach(field => {
                 const cellKey = `${index}_${field.key}`;
-                row[field.key] = encomendasData.data[cellKey] || '';
+                row[field.key] = snapData[cellKey] || '';
             });
-            
+
             return row;
         });
-        
-        // 3. Inserir todas as linhas
+
+        // 2. Verificar se o mês mudou entre a captura e agora
+        if (currentMonth !== snapMonth || currentYear !== snapYear) {
+            console.warn(`🛡️ ATENÇÃO: Mês mudou durante preparação! Era ${snapMonth}/${snapYear}, agora é ${currentMonth}/${currentYear}. Continuando com snapshot original.`);
+        }
+
+        // 3. Apagar linhas do mês (usando snapshot)
+        const { error: deleteError } = await db
+            .from('mapa_encomendas')
+            .delete()
+            .eq('month', snapMonth)
+            .eq('year', snapYear);
+
+        if (deleteError) {
+            console.error('❌ Erro ao deletar:', deleteError);
+            // NÃO lançar — tentar inserir mesmo assim para não perder dados
+        }
+
+        // 4. Inserir IMEDIATAMENTE (rows já preparados, sem re-ler currentMonth)
         if (rows.length > 0) {
-            const { error: insertError } = await db
-                .from('mapa_encomendas')
-                .insert(rows);
-            
-            if (insertError) {
-                console.error('❌ Erro ao inserir:', insertError);
-                throw insertError;
+            // Inserir em lotes de 500 para evitar timeout
+            const BATCH = 500;
+            for (let i = 0; i < rows.length; i += BATCH) {
+                const chunk = rows.slice(i, i + BATCH);
+                const { error: insertError } = await db
+                    .from('mapa_encomendas')
+                    .insert(chunk);
+
+                if (insertError) {
+                    console.error(`❌ Erro ao inserir lote ${i}-${i + chunk.length}:`, insertError);
+                    throw insertError;
+                }
             }
         }
-        
-        console.log('✅ Todas as linhas salvas no Supabase');
+
+        console.log(`✅ Todas as ${rows.length} linhas salvas para ${snapMonth}/${snapYear}`);
     } catch (error) {
         console.error('❌ Erro ao salvar todas as linhas:', error);
         throw error;
@@ -3601,47 +3725,58 @@ async function logHistory(actionType, details = {}) {
     }
 }
 
+// 🔥 BUGFIX v2.52.0: Mesma proteção que saveAllRows — snapshot no início
 async function saveEncomendasData() {
+    const snapMonth = currentMonth;
+    const snapYear = currentYear;
+    const snapDates = [...encomendasData.dates];
+    const snapData = { ...encomendasData.data };
+    const snapFields = encomendasData.fields;
+
+    if (snapDates.length === 0 || snapDates.filter(d => d && d.trim()).length === 0) {
+        console.error('🛡️ ABORTADO saveEncomendasData: dados vazios!');
+        return;
+    }
+
     try {
-        // Apagar dados antigos do mês usando Supabase
-        const { error: deleteError } = await db
-            .from('mapa_encomendas')
-            .delete()
-            .eq('month', currentMonth)
-            .eq('year', currentYear);
-        
-        if (deleteError) {
-            console.warn('⚠️ Erro ao deletar:', deleteError);
-        }
-        
-        // Preparar linhas para inserir
-        const rows = encomendasData.dates.map((date, index) => {
+        // Preparar linhas PRIMEIRO
+        const rows = snapDates.map((date, index) => {
             const row = {
-                month: currentMonth,
-                year: currentYear,
+                month: snapMonth,
+                year: snapYear,
                 date: date,
                 row_order: index
             };
-            
-            // Coletar dados das células usando INDEX
-            encomendasData.fields.forEach(field => {
-                const cellKey = `${index}_${field.key}`;  // USAR index
-                row[field.key] = encomendasData.data[cellKey] || '';
+            snapFields.forEach(field => {
+                const cellKey = `${index}_${field.key}`;
+                row[field.key] = snapData[cellKey] || '';
             });
-            
             return row;
         });
-        
-        // Inserir novas linhas usando Supabase diretamente
-        console.log('💾 Salvando', rows.length, 'linhas no Supabase...');
-        
-        const { error } = await db
+
+        // Apagar dados antigos do mês (usando snapshot)
+        const { error: deleteError } = await db
             .from('mapa_encomendas')
-            .insert(rows);
-        
-        if (error) throw error;
-        
-        console.log('✅ Encomendas salvas no Supabase!');
+            .delete()
+            .eq('month', snapMonth)
+            .eq('year', snapYear);
+
+        if (deleteError) {
+            console.warn('⚠️ Erro ao deletar:', deleteError);
+        }
+
+        // Inserir imediatamente
+        console.log('💾 Salvando', rows.length, 'linhas no Supabase...');
+        const BATCH = 500;
+        for (let i = 0; i < rows.length; i += BATCH) {
+            const chunk = rows.slice(i, i + BATCH);
+            const { error } = await db
+                .from('mapa_encomendas')
+                .insert(chunk);
+            if (error) throw error;
+        }
+
+        console.log(`✅ Encomendas salvas (${rows.length} linhas para ${snapMonth}/${snapYear})`);
     } catch (error) {
         console.error('❌ Erro ao salvar encomendas:', error);
         console.warn('💡 Dados mantidos em memória.');
@@ -4280,19 +4415,25 @@ function renderCalendarioSemanal() {
         generateWeekTabs();
     }
     
-    // 🔥 FEATURE v2.51.15: Determinar semana ATUAL (data de hoje) ao invés da primeira
-    if (!currentCalendarioWeek && weekTabs.length > 0) {
-        const today = new Date();
-        const currentWeekNumber = getWeekNumber(today);
-        
-        // Se semana atual existe nas tabs, selecionar ela
-        if (weekTabs.includes(currentWeekNumber)) {
-            currentCalendarioWeek = currentWeekNumber;
-            console.log(`📅 Semana ATUAL selecionada automaticamente no Mapa Cargas: Semana ${currentCalendarioWeek}`);
+    // 🔥 BUGFIX v2.52.0: SEMPRE revalidar currentCalendarioWeek (mesmo fix que generateWeekTabs)
+    // Corrige bug: ao mudar de mês, semana ficava com valor do mês anterior
+    if (weekTabs.length > 0) {
+        if (currentCalendarioWeek && weekTabs.includes(currentCalendarioWeek)) {
+            console.log(`📅 Semana ${currentCalendarioWeek} mantida no Mapa Cargas (válida para este mês)`);
         } else {
-            // Fallback: semana mais próxima (primeira disponível)
-            currentCalendarioWeek = weekTabs[0];
-            console.log(`⚠️ Semana atual (${currentWeekNumber}) não encontrada. Usando primeira: Semana ${currentCalendarioWeek}`);
+            const today = new Date();
+            const currentWeekNumber = getWeekNumber(today);
+
+            if (weekTabs.includes(currentWeekNumber)) {
+                currentCalendarioWeek = currentWeekNumber;
+                console.log(`📅 Semana ATUAL selecionada automaticamente no Mapa Cargas: Semana ${currentCalendarioWeek}`);
+            } else {
+                const closest = weekTabs.reduce((prev, curr) =>
+                    Math.abs(curr - currentWeekNumber) < Math.abs(prev - currentWeekNumber) ? curr : prev
+                );
+                currentCalendarioWeek = closest;
+                console.log(`⚠️ Semana atual (${currentWeekNumber}) não encontrada. Usando mais próxima: Semana ${currentCalendarioWeek}`);
+            }
         }
     }
     
@@ -5318,16 +5459,30 @@ window.handlePdfUpload = async function(event) {
             return;
         }
         
+        // 🔥 v2.52.0: Filtrar clientes LPR e IPP — não importar nem alterar encomendas destes clientes
+        const EXCLUDED_CLIENTS_RE = /\bLPR\b|\bIPP\b/i;
+        const filteredOrders = orders.filter(o => {
+            if (EXCLUDED_CLIENTS_RE.test(o.cliente)) {
+                console.log(`🚫 Excluído (cliente LPR/IPP): ${o.enc} | ${o.cliente}`);
+                return false;
+            }
+            return true;
+        });
+        const excludedCount = orders.length - filteredOrders.length;
+        if (excludedCount > 0) {
+            console.log(`🚫 ${excludedCount} encomenda(s) excluída(s) (clientes LPR/IPP)`);
+        }
+
         // Guardar orders globalmente para importar depois
-        window.parsedOrders = orders;
+        window.parsedOrders = filteredOrders;
         window.importDiff = null;
 
-        statusEl.innerHTML = `<span style="color: #34C759;">✅ ${orders.length} encomenda(s) encontrada(s) — a comparar com BD...</span>`;
+        statusEl.innerHTML = `<span style="color: #34C759;">✅ ${filteredOrders.length} encomenda(s) encontrada(s)${excludedCount > 0 ? ` (${excludedCount} excluída(s) — LPR/IPP)` : ''} — a comparar com BD...</span>`;
 
         // Mostrar diff preview (async — compara com BD)
-        await showDiffPreview(orders);
+        await showDiffPreview(filteredOrders);
 
-        statusEl.innerHTML = `<span style="color: #34C759;">✅ ${orders.length} encomenda(s) encontrada(s)</span>`;
+        statusEl.innerHTML = `<span style="color: #34C759;">✅ ${filteredOrders.length} encomenda(s) encontrada(s)${excludedCount > 0 ? ` (${excludedCount} excluída(s) — LPR/IPP)` : ''}</span>`;
         
     } catch (error) {
         console.error('Erro ao processar PDF:', error);
@@ -5358,7 +5513,13 @@ async function showDiffPreview(orders) {
                 semNum = getWeekNumberFromDateStr(dateFormatted).toString();
             }
         }
-        return { enc: order.enc || '', cliente: order.cliente || '', date: dateFormatted, month: monthName, year: yearNum, sem: semNum, medida: order.medida || '', qtd: order.qtd !== undefined ? order.qtd.toString() : '' };
+        return {
+            enc: order.enc || '', cliente: order.cliente || '', date: dateFormatted,
+            month: monthName, year: yearNum, sem: semNum,
+            medida: order.medida || '', qtd: order.qtd !== undefined ? order.qtd.toString() : '',
+            local: order.local || '',   // 🆕 v2.52.0: Descarga do PDF
+            obs: order.obs || ''        // 🆕 v2.52.0: Referência do PDF
+        };
     }
 
     const key = r => `${r.enc}|${r.date}|${r.medida}`;
@@ -5377,7 +5538,17 @@ async function showDiffPreview(orders) {
             .eq('year', parseInt(y));
         if (data) existingRows.push(...data);
     }
-    const meaningfulRows = existingRows.filter(r => r.enc && r.enc.trim() !== '');
+    // 🔥 v2.52.0: Proteger registos de clientes LPR/IPP — não alterar nem reordenar
+    const EXCLUDED_CLIENTS_RE = /\bLPR\b|\bIPP\b/i;
+    const meaningfulRows = existingRows.filter(r => {
+        if (!r.enc || r.enc.trim() === '') return false;
+        // Proteger linhas de clientes LPR/IPP contra qualquer alteração pelo import
+        if (EXCLUDED_CLIENTS_RE.test(r.cliente)) {
+            console.log(`🛡️ Protegido (cliente LPR/IPP): ${r.enc} | ${r.cliente} — não será alterado pelo import`);
+            return false; // Excluir da comparação = nunca será tocado
+        }
+        return true;
+    });
 
     // Fase 1: correspondência exata (enc|date|medida)
     const dbExactMap = new Map(meaningfulRows.map(r => [key(r), r]));
@@ -5397,7 +5568,11 @@ async function showDiffPreview(orders) {
         if (dbExactMap.has(k)) {
             const dbRec = dbExactMap.get(k);
             matchedDbIds.add(dbRec.id);
-            if (dbRec.qtd !== pdfRec.qtd || dbRec.cliente !== pdfRec.cliente) {
+            // 🔥 v2.52.0: Comparar também local e obs (se PDF os fornece)
+            const qtyDiff = dbRec.qtd !== pdfRec.qtd || dbRec.cliente !== pdfRec.cliente;
+            const localDiff = pdfRec.local && String(dbRec.local || '') !== String(pdfRec.local);
+            const obsDiff = pdfRec.obs && String(dbRec.obs || '') !== String(pdfRec.obs);
+            if (qtyDiff || localDiff || obsDiff) {
                 toUpdate.push({ pdfRec, dbRec });
             } else {
                 toSkip.push(pdfRec);
@@ -5408,7 +5583,11 @@ async function showDiffPreview(orders) {
             if (encMatches.length === 1) {
                 const dbRec = encMatches[0];
                 matchedDbIds.add(dbRec.id);
-                const anyDiff = ['date','medida','qtd','cliente','sem'].some(f => String(pdfRec[f]||'') !== String(dbRec[f]||''));
+                // 🔥 v2.52.0: Incluir local e obs na comparação (se PDF os fornece)
+                const fieldsToCheck = ['date','medida','qtd','cliente','sem'];
+                if (pdfRec.local) fieldsToCheck.push('local');
+                if (pdfRec.obs) fieldsToCheck.push('obs');
+                const anyDiff = fieldsToCheck.some(f => String(pdfRec[f]||'') !== String(dbRec[f]||''));
                 if (anyDiff) toUpdate.push({ pdfRec, dbRec });
                 else toSkip.push(pdfRec);
             } else {
@@ -5541,6 +5720,115 @@ window.closePdfImporter = function() {
     }, 300);
 }
 
+// ===================================================================
+// 🔥 v2.52.0: Parser para NOVO formato PDF (com Referência e Descarga)
+// Colunas: Documento | Referência | Dt.Entrega | Descarga | Qtd.Enc UN | Qtd.Satisf | Qtd.Pend
+// Referência → campo "obs" (observações) no mapa de encomendas
+// Descarga → campo "local" no mapa de encomendas
+// ===================================================================
+function parseNewPdfFormat(text, parseQtd) {
+    console.log('📄 [NOVO FORMAT] Iniciando parse...');
+    const orders = [];
+    let m;
+
+    // 1. Mapear código de cliente → nome a partir dos cabeçalhos de secção
+    // Padrão: C#### seguido de NOME DA EMPRESA, antes do primeiro ECL da secção
+    const clientMap = {};
+    const sectionBounds = [];
+    // Regex: C#### (opcionalmente com sufixo tipo "PT") seguido de nome em maiúsculas até ECL
+    const clientRegex = /(C\d{4,5}(?:\s+[A-Z]{2,3})?)\s+([A-Z\u00C0-\u00FF][\w\u00C0-\u00FF\s,.\-&'\/()]+?)(?=\s+ECL\s)/g;
+    while ((m = clientRegex.exec(text)) !== null) {
+        const code = m[1].trim();
+        const name = m[2].trim();
+        if (!clientMap[code]) {
+            clientMap[code] = name;
+            sectionBounds.push({ code, pos: m.index });
+            console.log(`👤 [NOVO] Cliente: ${code} → ${name}`);
+        }
+    }
+    sectionBounds.sort((a, b) => a.pos - b.pos);
+
+    function getClientAtPos(pos) {
+        let code = null;
+        for (const s of sectionBounds) {
+            if (s.pos <= pos) code = s.code; else break;
+        }
+        return code;
+    }
+
+    // 2. Encontrar linhas ECL: ECL YYYY/NNN [ref] DD/MM/YYYY [descarga] qty UN qty qty
+    // Usamos regex que captura ECL + meio + 3 quantidades
+    const eclMatches = [];
+    const eclRegex = /(ECL\s+\d{4}\/\d+)\s+(.+?)([\d.,]+)\s+UN\s+([\d.,]+)\s+([\d.,]+)/g;
+    while ((m = eclRegex.exec(text)) !== null) {
+        const doc = m[1].trim().replace(/\s+/g, ' ');
+        const middle = m[2].trim();
+        const qtdPend = parseQtd(m[5]); // Última coluna = Qtd. Pendente
+
+        // Separar o "middle" em: [referência] DD/MM/YYYY [descarga]
+        // Usar a ÚLTIMA data encontrada (caso a referência contenha datas, ex: "mail 16/03/2026 - AG")
+        const dateMatches = [...middle.matchAll(/(\d{2}\/\d{2}\/\d{4})/g)];
+        if (dateMatches.length === 0) continue;
+
+        const lastDateMatch = dateMatches[dateMatches.length - 1];
+        const date = lastDateMatch[1];
+        const ref = middle.substring(0, lastDateMatch.index).trim();
+        const descarga = middle.substring(lastDateMatch.index + 10).trim();
+
+        // Determinar cliente pela posição no texto (secção de cliente)
+        const clientCode = getClientAtPos(m.index);
+        const cliente = clientCode ? (clientMap[clientCode] || clientCode) : '';
+
+        eclMatches.push({
+            pos: m.index,
+            end: m.index + m[0].length,
+            doc, date, ref, descarga, qtd: qtdPend, clientCode, cliente
+        });
+    }
+    console.log(`✅ [NOVO] ${eclMatches.length} documentos ECL encontrados`);
+
+    // 3. Encontrar produtos (mesmo padrão, mas com 3 quantidades: qty UN qty qty)
+    const prodMatches = [];
+    const prodRegex = /(P\d[A-Z0-9\-]{3,}|P-[A-Z0-9\-]{3,}|#\d{4,}|\d{5,9}\.\d{4}(?!\d))\s+(.+?)\s+[\d.,]+\s+UN\s+[\d.,]+\s+[\d.,]+/g;
+    while ((m = prodRegex.exec(text)) !== null) {
+        prodMatches.push({
+            pos: m.index,
+            end: m.index + m[0].length,
+            code: m[1],
+            desc: m[2].trim()
+        });
+    }
+    console.log(`✅ [NOVO] ${prodMatches.length} produtos encontrados`);
+
+    // 4. Associar ECLs ao produto seguinte (mesma lógica do parser antigo)
+    prodMatches.forEach((prod, pi) => {
+        const prevEnd = pi > 0 ? prodMatches[pi - 1].end : 0;
+        const relatedEcls = eclMatches.filter(e =>
+            e.pos >= prevEnd && e.pos < prod.pos
+        );
+
+        relatedEcls.forEach(ecl => {
+            orders.push({
+                enc: ecl.doc,
+                cliente: ecl.cliente,
+                data_entrega: ecl.date,
+                medida: prod.desc,
+                qtd: ecl.qtd,
+                local: ecl.descarga,   // 🆕 Descarga → LOCAL
+                obs: ecl.ref           // 🆕 Referência → OBSERVAÇÕES
+            });
+            console.log(`✅ ${ecl.doc} | ${ecl.cliente} | ${ecl.date} | ${prod.desc} | ${ecl.qtd} | Local: ${ecl.descarga} | Obs: ${ecl.ref}`);
+        });
+    });
+
+    console.log(`✅ [NOVO] Parse completo: ${orders.length} encomendas detectadas`);
+    if (orders.length === 0) {
+        console.warn('⚠️ [NOVO] NENHUMA encomenda detectada! Verifique o formato do PDF.');
+    }
+
+    return orders;
+}
+
 function parsePdfText(rawText) {
     // Parser para formato Primavera BSS (ECL YYYY/NNN)
     // O font Primavera usa um mapeamento PUA completamente custom (não é ASCII+0xF000).
@@ -5561,16 +5849,22 @@ function parsePdfText(rawText) {
     console.log('📄 Iniciando parse do PDF PALSYSTEMS...');
     console.log('📄 Texto completo (primeiros 1000 chars):', text.substring(0, 1000));
 
-    const orders = [];
-    let m;
-
     // Helper: parse quantidade em formato português (ponto=milhar, vírgula=decimal)
-    // Ex: "1.620,000" → 1620 | "494,000" → 494 | "16.308,000" → 16308 | "26,000" → 26
     function parseQtd(s) {
         const t = s.trim();
-        // Remove pontos de milhar, depois descarta parte decimal (após vírgula)
         return parseInt(t.replace(/\./g, '').split(',')[0]) || 0;
     }
+
+    // 🔥 v2.52.0: Detetar formato do PDF (novo com Referência/Descarga vs antigo)
+    const isNewFormat = /Refer[êe]ncia/.test(text) && /Descarga/.test(text);
+    if (isNewFormat) {
+        console.log('📄 ✅ Formato NOVO detectado (com Referência e Descarga)');
+        return parseNewPdfFormat(text, parseQtd);
+    }
+    console.log('📄 Formato ANTIGO detectado (sem Referência/Descarga)');
+
+    const orders = [];
+    let m;
 
     // 1. Mapear código de cliente → nome
     // PDF.js concatena texto com espaços (sem \n), por isso o nome aparece inline antes de qty.
@@ -5698,7 +5992,8 @@ async function importPdfData() {
         if (toUpdate.length > 0) {
             statusEl.innerHTML = `<span style="color:#FF9500;">✎ Atualizando ${toUpdate.length} linha(s)...</span>`;
             // PDF-provided fields: date, month, year, enc, medida, qtd, cliente, sem
-            // Manual fields (local, transp, et, nviagem, horario_carga, obs) are NOT touched
+            // 🔥 v2.52.0: local e obs agora vêm do PDF (Descarga e Referência) se disponíveis
+            // Manual fields (transp, et, nviagem, horario_carga) are NOT touched
             await Promise.all(toUpdate.map(({ id, pdfRec }) => {
                 const changes = {
                     date: pdfRec.date,
@@ -5710,6 +6005,9 @@ async function importPdfData() {
                     cliente: pdfRec.cliente,
                     sem: pdfRec.sem,
                 };
+                // 🆕 Só atualizar local/obs se o PDF os fornece (formato novo)
+                if (pdfRec.local) changes.local = pdfRec.local;
+                if (pdfRec.obs) changes.obs = pdfRec.obs;
                 return db.from('mapa_encomendas').update(changes).eq('id', id);
             }));
             // Audit
@@ -5781,7 +6079,8 @@ async function importPdfData() {
                 const newOrder = i + 1;
                 if (r._new) {
                     const { _new, ...rec } = r;
-                    toInsertFinal.push({ ...rec, local: '', transp: '', horario_carga: '', row_order: newOrder });
+                    // 🔥 v2.52.0: local e obs já vêm de rec (do PDF), não sobrescrever com ''
+                    toInsertFinal.push({ ...rec, local: rec.local || '', obs: rec.obs || '', transp: '', horario_carga: '', row_order: newOrder });
                 } else if ((r.row_order || 0) !== newOrder) {
                     rowOrderUpdates.push({ id: r.id, row_order: newOrder });
                 }
@@ -6555,6 +6854,203 @@ forceZoomReset();
 
 // Reaplicar após resize
 window.addEventListener('resize', forceZoomReset);
+
+// ===================================================================
+// 🖨️ IMPRIMIR CARGAS DO DIA (v2.52.0)
+// ===================================================================
+
+function openPrintCargasModal() {
+    const modal = document.getElementById('modal-print-cargas');
+    if (!modal) return;
+    modal.classList.add('active');
+
+    // Default to today's date
+    const dateInput = document.getElementById('print-cargas-date');
+    const today = new Date();
+    dateInput.value = today.toISOString().split('T')[0];
+
+    // Attach change listener
+    dateInput.onchange = () => generatePrintCargasPreview();
+
+    // Generate initial preview
+    generatePrintCargasPreview();
+}
+
+function closePrintCargasModal() {
+    const modal = document.getElementById('modal-print-cargas');
+    if (modal) modal.classList.remove('active');
+}
+
+async function generatePrintCargasPreview() {
+    const dateInput = document.getElementById('print-cargas-date');
+    const preview = document.getElementById('print-cargas-preview');
+    const printBtn = document.getElementById('print-cargas-confirm-btn');
+
+    if (!dateInput.value) {
+        preview.innerHTML = '<p style="color:#999;text-align:center;">Selecione uma data.</p>';
+        printBtn.disabled = true;
+        return;
+    }
+
+    const selectedDate = new Date(dateInput.value);
+    const day = String(selectedDate.getDate()).padStart(2, '0');
+    const monthNames = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    const monthAbbr = monthNames[selectedDate.getMonth()];
+    const year = selectedDate.getFullYear();
+    const dateStr = `${day}/${monthAbbr}`;
+    const dayNames = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
+    const dayName = dayNames[selectedDate.getDay()];
+
+    preview.innerHTML = '<p style="text-align:center;color:#666;">⏳ A carregar cargas...</p>';
+
+    try {
+        // Fetch all rows for this day
+        const { data, error } = await db
+            .from('mapa_encomendas')
+            .select('*')
+            .eq('month', monthAbbr)
+            .eq('year', year)
+            .eq('date', dateStr)
+            .order('row_order', { ascending: true });
+
+        if (error) throw error;
+
+        // Filter rows that have at least transp OR cliente filled
+        const cargas = (data || []).filter(r => (r.transp && r.transp.trim()) || (r.cliente && r.cliente.trim()));
+
+        if (cargas.length === 0) {
+            preview.innerHTML = `<p style="text-align:center;color:#999;padding:20px;">Nenhuma carga encontrada para <strong>${dateStr} (${dayName})</strong></p>`;
+            printBtn.disabled = true;
+            return;
+        }
+
+        // Group by horario_carga
+        const grouped = {};
+        cargas.forEach(r => {
+            const slot = r.horario_carga || 'Sem Horário';
+            if (!grouped[slot]) grouped[slot] = [];
+            grouped[slot].push(r);
+        });
+
+        // Build preview table
+        let html = `<div style="margin-bottom:12px;">
+            <strong style="font-size:16px;">${dateStr} — ${dayName}</strong>
+            <span style="color:#666;margin-left:12px;">${cargas.length} carga(s)</span>
+        </div>`;
+        html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+        html += '<thead><tr style="background:#E5E5EA;">';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Horário</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Cliente</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Medida</th>';
+        html += '<th style="padding:6px 8px;text-align:right;border:1px solid #D1D1D6;">Qtd</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Transp</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Local</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">ENC</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">NºViagem</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Obs</th>';
+        html += '</tr></thead><tbody>';
+
+        // Sort time slots
+        const slotOrder = ['Sem Horário','06:00 - 08:00','08:00 - 10:00','10:00 - 12:00','12:00 - 14:00','14:00 - 16:00','16:00 - 18:00','18:00 - 20:00'];
+        const sortedSlots = Object.keys(grouped).sort((a, b) => {
+            const ia = slotOrder.indexOf(a);
+            const ib = slotOrder.indexOf(b);
+            return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+        });
+
+        sortedSlots.forEach(slot => {
+            grouped[slot].forEach((r, i) => {
+                html += '<tr style="border-bottom:1px solid #E5E5EA;">';
+                if (i === 0) {
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;font-weight:600;vertical-align:top;" rowspan="${grouped[slot].length}">${slot}</td>`;
+                }
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.cliente || ''}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.medida || ''}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;text-align:right;">${r.qtd || ''}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.transp || ''}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.local || ''}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.enc || ''}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.nviagem || ''}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.obs || ''}</td>`;
+                html += '</tr>';
+            });
+        });
+
+        html += '</tbody></table>';
+        preview.innerHTML = html;
+        printBtn.disabled = false;
+
+        // Store for printing
+        window._printCargasData = { cargas, dateStr, dayName, year, grouped, sortedSlots };
+
+    } catch (err) {
+        console.error('Erro ao gerar preview de impressão:', err);
+        preview.innerHTML = `<p style="color:#FF3B30;text-align:center;">❌ Erro: ${err.message}</p>`;
+        printBtn.disabled = true;
+    }
+}
+
+function executePrintCargas() {
+    if (!window._printCargasData) return;
+    const { cargas, dateStr, dayName, year, grouped, sortedSlots } = window._printCargasData;
+
+    // Build print-friendly HTML
+    let printHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Cargas ${dateStr} ${dayName}</title>
+    <style>
+        @page { size: landscape; margin: 12mm; }
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #000; }
+        h1 { font-size: 18px; margin-bottom: 4px; }
+        h2 { font-size: 13px; color: #555; margin-top: 0; font-weight: normal; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+        th { background: #333; color: #fff; padding: 6px 8px; text-align: left; font-size: 11px; }
+        td { padding: 5px 8px; border: 1px solid #ccc; font-size: 11px; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .slot-header td { font-weight: 700; background: #E8E8E8; }
+        .footer { margin-top: 16px; font-size: 10px; color: #999; text-align: right; }
+    </style></head><body>
+    <h1>🚚 Cargas — ${dateStr} (${dayName})</h1>
+    <h2>PSY — Gestão de Estufas | ${cargas.length} carga(s) | Impresso: ${new Date().toLocaleString('pt-PT')}</h2>
+    <table>
+    <thead><tr>
+        <th>Horário</th><th>Cliente</th><th>Medida</th><th style="text-align:right;">Qtd</th>
+        <th>Transp.</th><th>Local</th><th>ENC</th><th>NºViagem</th><th>Obs</th>
+    </tr></thead><tbody>`;
+
+    sortedSlots.forEach(slot => {
+        grouped[slot].forEach((r, i) => {
+            printHtml += '<tr>';
+            if (i === 0) {
+                printHtml += `<td rowspan="${grouped[slot].length}" style="font-weight:700;vertical-align:top;">${slot}</td>`;
+            }
+            printHtml += `<td>${r.cliente || ''}</td>`;
+            printHtml += `<td>${r.medida || ''}</td>`;
+            printHtml += `<td style="text-align:right;">${r.qtd || ''}</td>`;
+            printHtml += `<td>${r.transp || ''}</td>`;
+            printHtml += `<td>${r.local || ''}</td>`;
+            printHtml += `<td>${r.enc || ''}</td>`;
+            printHtml += `<td>${r.nviagem || ''}</td>`;
+            printHtml += `<td>${r.obs || ''}</td>`;
+            printHtml += '</tr>';
+        });
+    });
+
+    printHtml += `</tbody></table>
+    <div class="footer">PalSystems — Gestão de Estufas e Cargas</div>
+    </body></html>`;
+
+    // Open print window
+    const printWindow = window.open('', '_blank', 'width=1100,height=700');
+    printWindow.document.write(printHtml);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+        printWindow.print();
+    }, 500);
+
+    closePrintCargasModal();
+    showToast('🖨️ Janela de impressão aberta', 'info');
+}
 
 // 🔥 v2.51.36i: Garantir que auto-refresh inicia
 console.log('%c🚀 INICIALIZANDO SISTEMA...', 'background: #5AC8FA; color: white; font-size: 16px; padding: 5px;');

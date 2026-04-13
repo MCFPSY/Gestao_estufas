@@ -2384,6 +2384,9 @@
                             🖍️ Destacar Célula
                         </button>
                         <button class="btn-secondary" id="fullscreen-btn" onclick="toggleFullscreen()">⛶ Ecrã Inteiro</button>
+                        <button class="btn-secondary" id="print-cargas-btn" onclick="openPrintCargasModal()" title="Imprimir cargas de um dia">
+                            🖨️ Imprimir Cargas
+                        </button>
                     </div>
                 </div>
                 
@@ -2716,9 +2719,10 @@
                 </div>
             </div>
         </div>
-        
-        <!-- 🆕 v2.51.36f: Modal Resumo Dia (Vista Detalhada) -->
-        <div class="modal" id="modal-resumo-dia" style="display:none;">
+    </div> <!-- 🔥 BUGFIX v2.52.0: Fechar modal-carga-details correctamente -->
+
+    <!-- 🆕 v2.51.36f: Modal Resumo Dia (Vista Detalhada) -->
+    <div class="modal" id="modal-resumo-dia" style="display:none;">
             <div class="modal-dialog" style="max-width: 900px; max-height: 90vh; overflow-y: auto;">
                 <div class="modal-sidebar" style="background: #28A745;"></div>
                 
@@ -2858,6 +2862,35 @@
         
     </script>
     
+    <!-- Modal: Imprimir Cargas de um Dia -->
+    <div class="modal" id="modal-print-cargas">
+        <div class="modal-dialog" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-sidebar" style="background: #FF9500;"></div>
+            <div class="modal-body">
+                <button class="modal-close" onclick="closePrintCargasModal()">×</button>
+                <div class="modal-header">
+                    <h3>🖨️ Imprimir Cargas do Dia</h3>
+                    <p class="modal-subtitle">Escolha o dia para imprimir</p>
+                </div>
+                <div style="padding: 16px 24px;">
+                    <label for="print-cargas-date" style="font-size:14px;font-weight:600;margin-bottom:8px;display:block;">Dia:</label>
+                    <input type="date" id="print-cargas-date" style="padding:10px 14px;border:1px solid #D1D1D6;border-radius:8px;font-size:15px;width:100%;box-sizing:border-box;" />
+                </div>
+                <div id="print-cargas-preview" style="padding: 0 24px 16px 24px;">
+                    <!-- Preview será gerado ao selecionar uma data -->
+                </div>
+                <div style="padding: 16px 24px; border-top: 1px solid #E5E5EA; display: flex; gap: 12px;">
+                    <button type="button" class="btn-secondary" onclick="closePrintCargasModal()" style="flex: 1;">
+                        Cancelar
+                    </button>
+                    <button type="button" class="btn-primary" id="print-cargas-confirm-btn" onclick="executePrintCargas()" style="flex: 1;" disabled>
+                        🖨️ Imprimir
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- JavaScript Completo -->
     <script src="app.js"></script>
 </body>
