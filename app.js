@@ -5440,13 +5440,34 @@ window.handlePdfUpload = async function(event) {
         const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
         
         let fullText = '';
-        
-        // Extrair texto de todas as páginas
+
+        // 🔥 v2.52.0: Extrair texto respeitando linhas do PDF (posição Y dos items)
+        // Agrupar items por linha (mesma coordenada Y ± tolerância) para manter estrutura
         for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
             const textContent = await page.getTextContent();
-            const pageText = textContent.items.map(item => item.str).join(' ');
-            fullText += pageText + '\n';
+
+            // Agrupar items por coordenada Y (linha visual)
+            const lineMap = new Map();
+            const yTolerance = 3; // pixels de tolerância para mesma linha
+
+            textContent.items.forEach(item => {
+                if (!item.str || !item.str.trim()) return;
+                const y = Math.round(item.transform[5] / yTolerance) * yTolerance; // normalizar Y
+                if (!lineMap.has(y)) lineMap.set(y, []);
+                lineMap.get(y).push({ x: item.transform[4], str: item.str });
+            });
+
+            // Ordenar linhas por Y descendente (PDF tem Y invertido: topo = valor alto)
+            const sortedLines = [...lineMap.entries()]
+                .sort((a, b) => b[0] - a[0])
+                .map(([y, items]) => {
+                    // Ordenar items dentro da linha por X (esquerda → direita)
+                    items.sort((a, b) => a.x - b.x);
+                    return items.map(it => it.str).join(' ');
+                });
+
+            fullText += sortedLines.join('\n') + '\n';
         }
         
         console.log('📄 PDF processado:', fullText.substring(0, 500));
