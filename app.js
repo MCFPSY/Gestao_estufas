@@ -1004,6 +1004,103 @@ let selectedCells = [];
 let matrixData = {}; // {cellId: {tipo, mergedCells: [], isGroup: bool}}
 let mergedGroups = []; // [{cells: [], tipo: string}]
 
+// 🔥 v2.52.2: Clipboard interno para copiar/cortar/colar células do Mapa Encomendas
+let _encClipboard = null; // { mode: 'copy'|'cut', cells: [{field, value}], sourceRow: n }
+
+// Listener global de teclado para Ctrl+C/X/V no Mapa de Encomendas
+document.addEventListener('keydown', function(e) {
+    // Só actuar se estamos no tab de encomendas e uma célula está focada
+    const activeEl = document.activeElement;
+    if (!activeEl || !activeEl.classList.contains('excel-cell')) return;
+    if (!activeEl.getAttribute('data-original-index')) return;
+
+    const isCtrl = e.ctrlKey || e.metaKey;
+    if (!isCtrl) return;
+
+    const originalIdx = parseInt(activeEl.getAttribute('data-original-index'));
+    const rowIndex = parseInt(activeEl.getAttribute('data-row-index'));
+
+    if (e.key === 'c' || e.key === 'C') {
+        // Ctrl+C: Copiar toda a linha (todos os campos editáveis)
+        e.preventDefault();
+        const cells = [];
+        encomendasData.fields.forEach(f => {
+            const val = encomendasData.data[`${originalIdx}_${f.key}`] || '';
+            cells.push({ field: f.key, value: val });
+        });
+        _encClipboard = { mode: 'copy', cells, sourceRow: originalIdx };
+        showToast(`📋 Linha ${rowIndex + 1} copiada (${cells.filter(c => c.value).length} campos)`, 'info');
+    }
+
+    if (e.key === 'x' || e.key === 'X') {
+        // Ctrl+X: Cortar toda a linha
+        e.preventDefault();
+        const cells = [];
+        encomendasData.fields.forEach(f => {
+            const val = encomendasData.data[`${originalIdx}_${f.key}`] || '';
+            cells.push({ field: f.key, value: val });
+        });
+        _encClipboard = { mode: 'cut', cells, sourceRow: originalIdx };
+        // Marcar visualmente a linha de origem
+        document.querySelectorAll(`.excel-cell[data-original-index="${originalIdx}"]`).forEach(c => {
+            c.style.opacity = '0.4';
+        });
+        showToast(`✂️ Linha ${rowIndex + 1} cortada`, 'info');
+    }
+
+    if ((e.key === 'v' || e.key === 'V') && _encClipboard) {
+        // Ctrl+V: Colar na linha actual
+        e.preventDefault();
+        const targetOriginalIdx = originalIdx;
+
+        // Não colar sobre a própria linha de origem (cut)
+        if (_encClipboard.mode === 'cut' && _encClipboard.sourceRow === targetOriginalIdx) {
+            showToast('⚠️ Não pode colar na mesma linha de origem', 'warning');
+            return;
+        }
+
+        // Colar cada campo (excepto 'sem' que é calculado automaticamente)
+        _encClipboard.cells.forEach(({ field, value }) => {
+            if (field === 'sem') return; // Não sobrescrever semana
+            const dataKey = `${targetOriginalIdx}_${field}`;
+            encomendasData.data[dataKey] = value;
+            queueSave(targetOriginalIdx, field, value);
+
+            // Actualizar visualmente
+            const cell = document.querySelector(`.excel-cell[data-original-index="${targetOriginalIdx}"][data-field="${field}"]`);
+            if (cell) {
+                if (cell.contentEditable === 'true') {
+                    cell.textContent = value;
+                } else {
+                    // Select (horario_carga)
+                    const sel = cell.querySelector('select');
+                    if (sel) sel.value = value;
+                }
+            }
+        });
+
+        // Se foi CUT, limpar a linha de origem
+        if (_encClipboard.mode === 'cut') {
+            const srcIdx = _encClipboard.sourceRow;
+            _encClipboard.cells.forEach(({ field }) => {
+                if (field === 'sem') return;
+                encomendasData.data[`${srcIdx}_${field}`] = '';
+                queueSave(srcIdx, field, '');
+                const srcCell = document.querySelector(`.excel-cell[data-original-index="${srcIdx}"][data-field="${field}"]`);
+                if (srcCell) {
+                    srcCell.style.opacity = '1';
+                    if (srcCell.contentEditable === 'true') srcCell.textContent = '';
+                    else { const sel = srcCell.querySelector('select'); if (sel) sel.value = ''; }
+                }
+            });
+            _encClipboard = null; // Cut é one-shot
+            showToast(`✅ Linha colada e origem limpa`, 'success');
+        } else {
+            showToast(`✅ Linha colada (Ctrl+V para colar noutro sítio)`, 'success');
+        }
+    }
+});
+
 function initMatrixSystem() {
     console.log('🔧 INIT MATRIX SYSTEM!');
     const cells = document.querySelectorAll('.matrix-cell');
@@ -6232,11 +6329,50 @@ async function renderResumoCargas() {
     container.innerHTML = '<p style="text-align: center; padding: 40px; color: #666;">⏳ Carregando dados...</p>';
     
     try {
-        // Usar dados já carregados do encomendasData
-        console.log('📦 Renderizando resumo com dados locais...');
-        
-        // 🔥 v2.52.1: Usar blocos de transporte em vez de linhas individuais
-        const allBlocks = buildTransportBlocksFromMemory(null); // Todos os blocos do mês
+        // 🔥 v2.52.2: Carregar dados das 3 semanas directamente da BD (cross-month)
+        console.log('📦 Renderizando resumo — carregando dados da BD...');
+        const today = new Date();
+        const startWeekNum = getWeekNumber(today);
+
+        // Determinar que meses cobrem as 3 semanas
+        const monthAbbrs = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+        const monthsNeeded = new Set();
+        for (let w = 0; w < 3; w++) {
+            const wDays = generateWeekDays(startWeekNum + w, currentYear);
+            wDays.forEach(d => {
+                const parts = d.date.split('/');
+                if (parts.length === 3) {
+                    const mi = parseInt(parts[1]) - 1;
+                    monthsNeeded.add(monthAbbrs[mi]);
+                }
+            });
+        }
+        console.log(`📅 Meses necessários para resumo: ${[...monthsNeeded].join(', ')}`);
+
+        // Buscar dados de todos os meses necessários
+        let allRows = [];
+        for (const m of monthsNeeded) {
+            const { data: mData } = await db.from('mapa_encomendas')
+                .select('date, row_order, cliente, local, medida, qtd, transp, horario_carga, sem')
+                .eq('month', m).eq('year', currentYear)
+                .order('row_order');
+            if (mData) allRows = allRows.concat(mData.map(r => ({ ...r, _month: m })));
+        }
+
+        // Agrupar por dia para buildTransportBlocks
+        const byDate = {};
+        allRows.forEach(r => {
+            if (!r.date) return;
+            if (!byDate[r.date]) byDate[r.date] = [];
+            byDate[r.date].push(r);
+        });
+
+        const allBlocks = [];
+        for (const [date, dateRows] of Object.entries(byDate)) {
+            dateRows.sort((a, b) => a.row_order - b.row_order);
+            allBlocks.push(...buildTransportBlocks(dateRows));
+        }
+
         const cargas = allBlocks.map(block => ({
             data: block.date,
             horario_carga: block.horario_carga,
@@ -6246,16 +6382,43 @@ async function renderResumoCargas() {
                 catch(e) { return 0; }
             })()
         }));
+
+        // 🔥 v2.52.2: Calcular totais de paletes por dia (TODAS as linhas, não só com TRANSP)
+        // e totais isolados para clientes chave
+        const KEY_CLIENTS = ['NAVIGATOR', 'DS SMITH', 'POLIVOUGA', 'JANGADA', 'PRS', 'CORK SUPPLY'];
+        const palletTotals = {}; // dateKey → { total, clients: { NAVIGATOR: n, ... } }
+        allRows.forEach(r => {
+            if (!r.date) return;
+            const qty = parseInt((r.qtd || '0').replace(/\./g, '').split(',')[0]) || 0;
+            if (qty === 0) return;
+
+            // Converter date "DD/mmm" → "DD/MM/YYYY" para comparar com weekDays
+            const parts = r.date.split('/');
+            const monthMap = {jan:'01',fev:'02',mar:'03',abr:'04',mai:'05',jun:'06',jul:'07',ago:'08',set:'09',out:'10',nov:'11',dez:'12'};
+            const dateKey = `${parts[0]}/${monthMap[parts[1]] || '01'}/${currentYear}`;
+
+            if (!palletTotals[dateKey]) {
+                palletTotals[dateKey] = { total: 0, clients: {} };
+                KEY_CLIENTS.forEach(c => palletTotals[dateKey].clients[c] = 0);
+            }
+            palletTotals[dateKey].total += qty;
+
+            const cl = (r.cliente || '').toUpperCase();
+            KEY_CLIENTS.forEach(key => {
+                if (cl.includes(key)) palletTotals[dateKey].clients[key] += qty;
+            });
+        });
+
+        // Guardar globalmente para usar no renderizador
+        window._resumoPalletTotals = palletTotals;
         
         console.log(`✅ ${cargas.length} cargas com transporte preenchido`);
         console.log('📊 Primeiras 3 cargas:', cargas.slice(0, 3));
         
-        // Usar a primeira semana do mês seleccionado como ponto de partida
-        const monthIndexMap = {'jan':0,'fev':1,'mar':2,'abr':3,'mai':4,'jun':5,'jul':6,'ago':7,'set':8,'out':9,'nov':10,'dez':11};
-        const selectedMonthIndex = monthIndexMap[currentMonth] ?? new Date().getMonth();
-        const firstDayOfMonth = new Date(currentYear, selectedMonthIndex, 1);
-        const startWeekNum = getWeekNumber(firstDayOfMonth);
-        console.log(`📅 Mês seleccionado: ${currentMonth}/${currentYear}, semana inicial: ${startWeekNum}`);
+        // 🔥 v2.52.2: Sempre começar na SEMANA ATUAL (não na primeira do mês)
+        const today = new Date();
+        const startWeekNum = getWeekNumber(today);
+        console.log(`📅 Semana atual: ${startWeekNum} (${today.toLocaleDateString('pt-PT')})`);
 
         // Criar estrutura de 3 semanas (1ª semana do mês + 2 seguintes)
         const weeks = [];
@@ -6376,10 +6539,31 @@ async function renderResumoCargas() {
                 if (total === 0) {
                     html += `<div style="font-size: 12px; color: #999;">Sem cargas</div>`;
                 } else {
-                    html += `<div style="font-size: 20px; font-weight: 700; color: #1D1D1F; margin-bottom: 4px;">${total}</div>`;
+                    html += `<div style="font-size: 20px; font-weight: 700; color: #1D1D1F; margin-bottom: 4px;">${total} entrega(s)</div>`;
                     if (loads.manha > 0) html += `<div style="font-size: 11px; color: #666;">☀️ Manhã: ${loads.manha}</div>`;
                     if (loads.tarde > 0) html += `<div style="font-size: 11px; color: #666;">🌙 Tarde: ${loads.tarde}</div>`;
                     if (loads.indefinido > 0) html += `<div style="font-size: 11px; color: #999;">❓ Indefinido: ${loads.indefinido}</div>`;
+                }
+
+                // 🔥 v2.52.2: Totais de paletes (todas as linhas + clientes chave)
+                const pt = window._resumoPalletTotals?.[dateKey];
+                if (pt && pt.total > 0) {
+                    html += `<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(0,0,0,0.1);">`;
+                    html += `<div style="font-size:12px;font-weight:700;color:#333;">📦 ${pt.total.toLocaleString('pt-PT')} paletes</div>`;
+                    const clientLabels = [
+                        { key: 'NAVIGATOR', label: 'Navigator', color: '#007AFF' },
+                        { key: 'DS SMITH', label: 'DS Smith', color: '#FF9500' },
+                        { key: 'POLIVOUGA', label: 'Polivouga', color: '#34C759' },
+                        { key: 'JANGADA', label: 'Jangada', color: '#AF52DE' },
+                        { key: 'PRS', label: 'PRS', color: '#FF3B30' },
+                        { key: 'CORK SUPPLY', label: 'Cork Supply', color: '#8B6914' },
+                    ];
+                    const clientHtml = clientLabels
+                        .filter(c => pt.clients[c.key] > 0)
+                        .map(c => `<span style="font-size:10px;color:${c.color};font-weight:600;">${c.label}: ${pt.clients[c.key].toLocaleString('pt-PT')}</span>`)
+                        .join(' · ');
+                    if (clientHtml) html += `<div style="margin-top:3px;">${clientHtml}</div>`;
+                    html += `</div>`;
                 }
                 
                 html += `</div>`;
