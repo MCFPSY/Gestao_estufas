@@ -3237,8 +3237,9 @@ async function loadEncomendasData() {
                 });
             });
 
-            // 🔥 BUGFIX v2.52.0: Verificar se o mês está completo (todos os dias úteis presentes)
-            // Se o mês só tem dados parciais (ex: apenas dados de import PDF), fazer merge com pré-população
+            // 🔥 BUGFIX v2.52.1: Verificar se o mês está completo (todos os dias úteis presentes)
+            // APENAS para meses com poucos dados (ex: só import PDF, sem pré-população)
+            // NÃO correr se o mês já tem estrutura razoável (>100 linhas = já foi pré-populado)
             const existingDatesSet = new Set(encomendasData.dates.filter(d => d && d.trim()));
             const monthIndex = {
                 'jan': 0, 'fev': 1, 'mar': 2, 'abr': 3, 'mai': 4, 'jun': 5,
@@ -3255,66 +3256,70 @@ async function loadEncomendasData() {
             }
             const missingDates = [...expectedDates].filter(d => !existingDatesSet.has(d));
 
-            if (missingDates.length > 0) {
-                console.warn(`⚠️ Mês incompleto: ${missingDates.length} dia(s) em falta. A preencher dias vazios...`);
+            // Só completar se há MUITOS dias em falta (>5) e poucas linhas no total
+            // Isto evita correr em meses já pré-populados que podem ter 1-2 dias removidos
+            if (missingDates.length > 5 && data.length < expectedDates.size * 10) {
+                console.warn(`⚠️ Mês muito incompleto: ${missingDates.length} dia(s) em falta de ${expectedDates.size}. A preencher...`);
                 console.log('   Dias em falta:', missingDates.sort().join(', '));
 
-                // Para cada dia em falta, adicionar linhas vazias (20 para dia útil, 5 para sábado)
-                // Inserir na posição correcta (ordenado cronologicamente)
-                const monthIdx = { jan:0,fev:1,mar:2,abr:3,mai:4,jun:5,jul:6,ago:7,set:8,out:9,nov:10,dez:11 };
                 function dateToSortNum(dateStr) {
                     const [dd] = dateStr.split('/');
                     return parseInt(dd) || 0;
                 }
 
-                // Ordenar dias em falta cronologicamente
                 missingDates.sort((a, b) => dateToSortNum(a) - dateToSortNum(b));
+
+                // Construir as novas linhas para inserir DIRECTAMENTE na BD (sem saveAllRows)
+                const newRows = [];
+                let nextRowOrder = data.length > 0 ? Math.max(...data.map(r => r.row_order || 0)) + 1 : 0;
 
                 for (const missDate of missingDates) {
                     const dayNum = parseInt(missDate.split('/')[0]);
                     const dateObj = new Date(currentYear, monthIndex, dayNum);
                     const dow = dateObj.getDay();
-                    const numLines = dow === 6 ? 5 : 20; // Sáb=5, Seg-Sex=20
+                    const numLines = dow === 6 ? 5 : 20;
                     const weekNum = getWeekNumber(dateObj);
 
-                    // Encontrar posição de inserção (depois do último dia anterior)
-                    let insertPos = encomendasData.dates.length;
-                    for (let i = 0; i < encomendasData.dates.length; i++) {
-                        if (encomendasData.dates[i] && dateToSortNum(encomendasData.dates[i]) > dayNum) {
-                            insertPos = i;
-                            break;
-                        }
-                    }
-
-                    // Inserir linhas no meio do array
-                    const newDates = new Array(numLines).fill(missDate);
-                    encomendasData.dates.splice(insertPos, 0, ...newDates);
-
-                    // Recalcular as keys dos dados (shift indices para a frente)
-                    const newData = {};
-                    Object.keys(encomendasData.data).forEach(key => {
-                        const [idxStr, ...fieldParts] = key.split('_');
-                        const idx = parseInt(idxStr);
-                        const fieldKey = fieldParts.join('_');
-                        if (idx >= insertPos) {
-                            newData[`${idx + numLines}_${fieldKey}`] = encomendasData.data[key];
-                        } else {
-                            newData[key] = encomendasData.data[key];
-                        }
-                    });
-
-                    // Adicionar SEM para as novas linhas
                     for (let i = 0; i < numLines; i++) {
-                        newData[`${insertPos + i}_sem`] = weekNum.toString();
+                        newRows.push({
+                            month: currentMonth,
+                            year: currentYear,
+                            date: missDate,
+                            row_order: nextRowOrder++,
+                            sem: weekNum.toString(),
+                            cliente: '', local: '', medida: '', qtd: '',
+                            transp: '', et: '', enc: '', nviagem: '',
+                            horario_carga: '', obs: ''
+                        });
                     }
-
-                    encomendasData.data = newData;
                 }
 
-                console.log(`✅ Mês completado: ${encomendasData.dates.length} linhas total`);
-
-                // Salvar estrutura completada na BD
-                await saveAllRows();
+                // Inserir APENAS as novas linhas (sem DELETE, sem saveAllRows)
+                if (newRows.length > 0) {
+                    console.log(`📝 Inserindo ${newRows.length} linhas para ${missingDates.length} dias em falta...`);
+                    const BATCH = 500;
+                    for (let i = 0; i < newRows.length; i += BATCH) {
+                        const chunk = newRows.slice(i, i + BATCH);
+                        await db.from('mapa_encomendas').insert(chunk);
+                    }
+                    console.log(`✅ Dias em falta preenchidos. A recarregar dados...`);
+                    // Recarregar dados frescos da BD (recursão segura: desta vez não haverá missing)
+                    const { data: freshData } = await db.from('mapa_encomendas')
+                        .select('*').eq('month', currentMonth).eq('year', currentYear);
+                    if (freshData) {
+                        freshData.sort((a, b) => a.row_order - b.row_order);
+                        encomendasData.dates = [];
+                        encomendasData.data = {};
+                        freshData.forEach(row => {
+                            const idx = row.row_order;
+                            while (encomendasData.dates.length <= idx) encomendasData.dates.push('');
+                            encomendasData.dates[idx] = row.date;
+                            encomendasData.fields.forEach(field => {
+                                if (row[field.key]) encomendasData.data[`${idx}_${field.key}`] = row[field.key];
+                            });
+                        });
+                    }
+                }
             }
         } else {
             console.log('📅 Mês vazio. Pré-populando com estrutura completa...');
