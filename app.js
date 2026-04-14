@@ -6416,7 +6416,6 @@ async function renderResumoCargas() {
         console.log('📊 Primeiras 3 cargas:', cargas.slice(0, 3));
         
         // 🔥 v2.52.2: Sempre começar na SEMANA ATUAL (não na primeira do mês)
-        const today = new Date();
         const startWeekNum = getWeekNumber(today);
         console.log(`📅 Semana atual: ${startWeekNum} (${today.toLocaleDateString('pt-PT')})`);
 
