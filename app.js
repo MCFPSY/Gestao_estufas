@@ -6502,9 +6502,11 @@ async function renderResumoCargas() {
         weeks.forEach(week => {
             html += `<div style="background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 20px;">`;
             html += `<h3 style="margin: 0 0 16px 0; color: #1D1D1F; font-size: 16px;">📅 Semana ${week.num}</h3>`;
-            html += `<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px;">`;
-            
-            week.days.forEach(day => {
+            // 🔥 v2.52.3: Filtrar sáb/dom e alargar cards
+            const weekDaysOnly = week.days.filter(d => d.dayName !== 'Sáb' && d.dayName !== 'Dom');
+            html += `<div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;">`;
+
+            weekDaysOnly.forEach(day => {
                 const dateKey = day.date;
                 const loads = week.loads[dateKey] || { manha: 0, tarde: 0, indefinido: 0 };
                 const total = loads.manha + loads.tarde + loads.indefinido;
@@ -6553,11 +6555,12 @@ async function renderResumoCargas() {
                         { key: 'PRS', label: 'PRS', color: '#FF3B30' },
                         { key: 'CORK SUPPLY', label: 'Cork Supply', color: '#8B6914' },
                     ];
-                    const clientHtml = clientLabels
+                    // 🔥 v2.52.3: Cada cliente numa linha separada
+                    const clientLines = clientLabels
                         .filter(c => pt.clients[c.key] > 0)
-                        .map(c => `<span style="font-size:10px;color:${c.color};font-weight:600;">${c.label}: ${pt.clients[c.key].toLocaleString('pt-PT')}</span>`)
-                        .join(' · ');
-                    if (clientHtml) html += `<div style="margin-top:3px;">${clientHtml}</div>`;
+                        .map(c => `<div style="font-size:10px;color:${c.color};font-weight:600;">${c.label}: ${pt.clients[c.key].toLocaleString('pt-PT')}</div>`)
+                        .join('');
+                    if (clientLines) html += `<div style="margin-top:3px;">${clientLines}</div>`;
                     html += `</div>`;
                 }
                 
