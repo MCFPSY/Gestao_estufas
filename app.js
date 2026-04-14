@@ -4407,10 +4407,102 @@ function normalizeDateFormat(dateStr) {
     return dateStr;
 }
 
+// ===================================================================
+// 🔥 v2.52.1: AGRUPAMENTO DE CARGAS POR BLOCO DE TRANSPORTE
+// Quando uma linha tem TRANSP preenchido, todas as linhas seguintes
+// (do mesmo dia, sem TRANSP) pertencem ao mesmo bloco de entrega.
+// O horário e transporte aplicam-se a todo o bloco.
+// ===================================================================
+function buildTransportBlocks(rows) {
+    // rows: array de objectos com campos da BD, ORDENADOS por row_order, do MESMO dia
+    // Retorna: array de blocos { transp, horario_carga, date, items[], totalQtd }
+    const blocks = [];
+    let currentBlock = null;
+
+    for (const row of rows) {
+        const transp = (row.transp || '').trim();
+        const hasData = (row.cliente || '').trim() || (row.medida || '').trim() || (row.qtd || '').trim();
+
+        if (transp) {
+            // Nova linha com TRANSP → novo bloco
+            currentBlock = {
+                transp: transp,
+                horario_carga: (row.horario_carga || '').trim(),
+                date: row.date,
+                nviagem: (row.nviagem || '').trim(),
+                items: [],
+                totalQtd: 0
+            };
+            blocks.push(currentBlock);
+            // Adicionar esta linha como primeiro item do bloco
+            const qty = parseInt((row.qtd || '0').replace(/\./g, '').split(',')[0]) || 0;
+            currentBlock.items.push({
+                cliente: (row.cliente || '').trim(),
+                local: (row.local || '').trim(),
+                medida: (row.medida || '').trim(),
+                qtd: row.qtd || '',
+                enc: (row.enc || '').trim(),
+                obs: (row.obs || '').trim(),
+                et: (row.et || '').trim(),
+            });
+            currentBlock.totalQtd += qty;
+        } else if (currentBlock && hasData) {
+            // Linha SEM TRANSP mas com dados → pertence ao bloco actual
+            const qty = parseInt((row.qtd || '0').replace(/\./g, '').split(',')[0]) || 0;
+            currentBlock.items.push({
+                cliente: (row.cliente || '').trim(),
+                local: (row.local || '').trim(),
+                medida: (row.medida || '').trim(),
+                qtd: row.qtd || '',
+                enc: (row.enc || '').trim(),
+                obs: (row.obs || '').trim(),
+                et: (row.et || '').trim(),
+            });
+            currentBlock.totalQtd += qty;
+        }
+        // Linhas vazias sem bloco activo são ignoradas
+    }
+
+    return blocks;
+}
+
+// Versão que trabalha directamente com encomendasData (in-memory)
+function buildTransportBlocksFromMemory(dateFilter, weekFilter) {
+    // Recolher linhas do encomendasData para o dia/semana indicado
+    const rows = [];
+    encomendasData.dates.forEach((date, idx) => {
+        if (dateFilter && date !== dateFilter) return;
+        if (weekFilter !== undefined) {
+            const sem = encomendasData.data[`${idx}_sem`];
+            if (parseInt(sem) !== weekFilter) return;
+        }
+        const row = { date, row_order: idx };
+        encomendasData.fields.forEach(f => {
+            row[f.key] = encomendasData.data[`${idx}_${f.key}`] || '';
+        });
+        rows.push(row);
+    });
+
+    // Agrupar por dia, depois buildTransportBlocks para cada dia
+    const byDate = {};
+    rows.forEach(r => {
+        if (!byDate[r.date]) byDate[r.date] = [];
+        byDate[r.date].push(r);
+    });
+
+    const allBlocks = [];
+    for (const [date, dateRows] of Object.entries(byDate)) {
+        dateRows.sort((a, b) => a.row_order - b.row_order);
+        const blocks = buildTransportBlocks(dateRows);
+        allBlocks.push(...blocks);
+    }
+    return allBlocks;
+}
+
 function renderCalendarioSemanal() {
     const container = document.getElementById('calendario-grid-container');
     if (!container) return;
-    
+
     // 🔥 BUGFIX v2.51.6: Limpar container ANTES de tudo (prevenir duplicação em hot-reload)
     container.innerHTML = '<div style="padding:40px;text-align:center;color:#666;">⏳ Carregando...</div>';
     
@@ -4455,48 +4547,25 @@ function renderCalendarioSemanal() {
         weekNumEl.textContent = currentCalendarioWeek;
     }
     
-    // 🔥 BUGFIX v2.51.2: Filtrar apenas linhas com TRANSP preenchido da semana atual
-    const cargas = [];
-    const cargasSemTransp = []; // 🔥 v2.51.29: Rastrear cargas SEM transp
-    
-    encomendasData.dates.forEach((date, originalIndex) => {
-        // Ignorar posições vazias (gaps no array)
-        if (!date || date.trim() === '') return;
-        
-        const semanaRaw = encomendasData.data[`${originalIndex}_sem`];
-        // Se sem está vazio/null na BD, calcular a partir da data
-        const semana = (semanaRaw && semanaRaw !== '') ? semanaRaw : getWeekNumberFromDateStr(date).toString();
-        const transp = encomendasData.data[`${originalIndex}_transp`];
-        const horario = encomendasData.data[`${originalIndex}_horario_carga`] || '';
-        const cliente = encomendasData.data[`${originalIndex}_cliente`] || '';
+    // 🔥 v2.52.1: Usar blocos de transporte em vez de linhas individuais
+    // Um bloco = 1 entrega (linha com TRANSP + linhas seguintes sem TRANSP)
+    const transportBlocks = buildTransportBlocksFromMemory(null, currentCalendarioWeek);
 
-        // 🔥 v2.51.29: Log cargas da semana SEM transp (para debug)
-        if (parseInt(semana) === currentCalendarioWeek && (!transp || transp.trim() === '')) {
-            cargasSemTransp.push({
-                date: date,
-                cliente: cliente,
-                horario: horario,
-                index: originalIndex
-            });
-        }
-        
-        // Filtrar por semana e TRANSP preenchido
-        if (parseInt(semana) !== currentCalendarioWeek || !transp || transp.trim() === '') {
-            return;
-        }
-        
-        cargas.push({
-            date: date,
-            index: originalIndex,  // Índice original (não posição no array filtrado)
-            cliente: cliente,
-            local: encomendasData.data[`${originalIndex}_local`] || '',
-            medida: encomendasData.data[`${originalIndex}_medida`] || '',
-            qtd: encomendasData.data[`${originalIndex}_qtd`] || '',
-            transp: transp,
-            horario: horario,
-            obs: encomendasData.data[`${originalIndex}_obs`] || ''
-        });
-    });
+    // Converter blocos para o formato "cargas" usado pelo renderizador
+    const cargas = transportBlocks.map(block => ({
+        date: block.date,
+        transp: block.transp,
+        horario: block.horario_carga,
+        nviagem: block.nviagem,
+        // Primeiro item define o display principal
+        cliente: block.items.map(it => it.cliente).filter(Boolean).join(', '),
+        local: block.items[0]?.local || '',
+        medida: block.items.map(it => it.medida ? `${it.medida} (${it.qtd})` : '').filter(Boolean).join(' + '),
+        qtd: block.totalQtd.toString(),
+        obs: block.items.map(it => it.obs).filter(Boolean).join(', '),
+        items: block.items,  // Guardar items para tooltip/detalhe
+    }));
+    const cargasSemTransp = []; // Placeholder para compatibilidade com logging
     
     console.log('\n' + '='.repeat(60));
     console.log(`📅 RENDER: Mapa Cargas - Semana ${currentCalendarioWeek}`);
@@ -6166,29 +6235,17 @@ async function renderResumoCargas() {
         // Usar dados já carregados do encomendasData
         console.log('📦 Renderizando resumo com dados locais...');
         
-        // Filtrar apenas linhas que tenham TRANSP preenchido
-        const cargas = [];
-        for (let i = 0; i < encomendasData.dates.length; i++) {
-            const data = encomendasData.dates[i];
-            if (!data) continue;
-
-            const transpKey = `${i}_transp`;
-            const transp = encomendasData.data[transpKey];
-
-            // Só incluir se tiver TRANSP preenchido
-            if (transp && transp.trim() !== '') {
-                const horarioKey = `${i}_horario_carga`;
-                // 🔥 Guardar índice original para usar o campo sem directamente
-                cargas.push({
-                    index: i,
-                    data: data,
-                    horario_carga: encomendasData.data[horarioKey] || '',
-                    transp: transp,
-                    // Usar sem do DB; calcular a partir da data se em falta
-                    sem: (function() { const s = encomendasData.data[`${i}_sem`]; return (s && s !== '') ? parseInt(s) : getWeekNumberFromDateStr(data); })()
-                });
-            }
-        }
+        // 🔥 v2.52.1: Usar blocos de transporte em vez de linhas individuais
+        const allBlocks = buildTransportBlocksFromMemory(null); // Todos os blocos do mês
+        const cargas = allBlocks.map(block => ({
+            data: block.date,
+            horario_carga: block.horario_carga,
+            transp: block.transp,
+            sem: (function() {
+                try { return getWeekNumberFromDateStr(block.date); }
+                catch(e) { return 0; }
+            })()
+        }));
         
         console.log(`✅ ${cargas.length} cargas com transporte preenchido`);
         console.log('📊 Primeiras 3 cargas:', cargas.slice(0, 3));
@@ -6941,42 +6998,40 @@ async function generatePrintCargasPreview() {
 
         if (error) throw error;
 
-        // Filter rows that have at least transp OR cliente filled
-        const cargas = (data || []).filter(r => (r.transp && r.transp.trim()) || (r.cliente && r.cliente.trim()));
+        // 🔥 v2.52.1: Usar blocos de transporte em vez de linhas individuais
+        const blocks = buildTransportBlocks(data || []);
 
-        if (cargas.length === 0) {
+        if (blocks.length === 0) {
             preview.innerHTML = `<p style="text-align:center;color:#999;padding:20px;">Nenhuma carga encontrada para <strong>${dateStr} (${dayName})</strong></p>`;
             printBtn.disabled = true;
             return;
         }
 
-        // Group by horario_carga
+        // Agrupar blocos por horário
         const grouped = {};
-        cargas.forEach(r => {
-            const slot = r.horario_carga || 'Sem Horário';
+        blocks.forEach(block => {
+            const slot = block.horario_carga || 'Sem Horário';
             if (!grouped[slot]) grouped[slot] = [];
-            grouped[slot].push(r);
+            grouped[slot].push(block);
         });
 
         // Build preview table
         let html = `<div style="margin-bottom:12px;">
             <strong style="font-size:16px;">${dateStr} — ${dayName}</strong>
-            <span style="color:#666;margin-left:12px;">${cargas.length} carga(s)</span>
+            <span style="color:#666;margin-left:12px;">${blocks.length} entrega(s)</span>
         </div>`;
         html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
         html += '<thead><tr style="background:#E5E5EA;">';
         html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Horário</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Transp</th>';
         html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Cliente</th>';
+        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Local</th>';
         html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Medida</th>';
         html += '<th style="padding:6px 8px;text-align:right;border:1px solid #D1D1D6;">Qtd</th>';
-        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Transp</th>';
-        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Local</th>';
         html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">ENC</th>';
-        html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">NºViagem</th>';
         html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Obs</th>';
         html += '</tr></thead><tbody>';
 
-        // Sort time slots
         const slotOrder = ['Sem Horário','06:00 - 08:00','08:00 - 10:00','10:00 - 12:00','12:00 - 14:00','14:00 - 16:00','16:00 - 18:00','18:00 - 20:00'];
         const sortedSlots = Object.keys(grouped).sort((a, b) => {
             const ia = slotOrder.indexOf(a);
@@ -6985,20 +7040,26 @@ async function generatePrintCargasPreview() {
         });
 
         sortedSlots.forEach(slot => {
-            grouped[slot].forEach((r, i) => {
-                html += '<tr style="border-bottom:1px solid #E5E5EA;">';
-                if (i === 0) {
-                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;font-weight:600;vertical-align:top;" rowspan="${grouped[slot].length}">${slot}</td>`;
-                }
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.cliente || ''}</td>`;
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.medida || ''}</td>`;
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;text-align:right;">${r.qtd || ''}</td>`;
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.transp || ''}</td>`;
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.local || ''}</td>`;
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.enc || ''}</td>`;
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.nviagem || ''}</td>`;
-                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${r.obs || ''}</td>`;
-                html += '</tr>';
+            grouped[slot].forEach((block, bi) => {
+                // Cabeçalho do bloco (transporte)
+                const totalItems = block.items.length;
+                block.items.forEach((item, ii) => {
+                    html += '<tr style="border-bottom:1px solid #E5E5EA;">';
+                    if (bi === 0 && ii === 0) {
+                        const slotBlockCount = grouped[slot].reduce((sum, b) => sum + b.items.length, 0);
+                        html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;font-weight:600;vertical-align:top;" rowspan="${slotBlockCount}">${slot}</td>`;
+                    }
+                    if (ii === 0) {
+                        html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;font-weight:600;vertical-align:top;background:#f0f4ff;" rowspan="${totalItems}">${block.transp}<br><span style="font-size:10px;color:#666;">NºV: ${block.nviagem || '—'}</span></td>`;
+                    }
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.cliente}</td>`;
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.local}</td>`;
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.medida}</td>`;
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;text-align:right;">${item.qtd}</td>`;
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.enc}</td>`;
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.obs}</td>`;
+                    html += '</tr>';
+                });
             });
         });
 
@@ -7007,7 +7068,7 @@ async function generatePrintCargasPreview() {
         printBtn.disabled = false;
 
         // Store for printing
-        window._printCargasData = { cargas, dateStr, dayName, year, grouped, sortedSlots };
+        window._printCargasData = { blocks, dateStr, dayName, year, grouped, sortedSlots };
 
     } catch (err) {
         console.error('Erro ao gerar preview de impressão:', err);
@@ -7018,9 +7079,9 @@ async function generatePrintCargasPreview() {
 
 function executePrintCargas() {
     if (!window._printCargasData) return;
-    const { cargas, dateStr, dayName, year, grouped, sortedSlots } = window._printCargasData;
+    const { blocks, dateStr, dayName, year, grouped, sortedSlots } = window._printCargasData;
 
-    // Build print-friendly HTML
+    // 🔥 v2.52.1: Impressão com blocos de transporte
     let printHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
     <title>Cargas ${dateStr} ${dayName}</title>
     <style>
@@ -7031,33 +7092,36 @@ function executePrintCargas() {
         table { width: 100%; border-collapse: collapse; margin-top: 12px; }
         th { background: #333; color: #fff; padding: 6px 8px; text-align: left; font-size: 11px; }
         td { padding: 5px 8px; border: 1px solid #ccc; font-size: 11px; }
-        tr:nth-child(even) { background: #f9f9f9; }
-        .slot-header td { font-weight: 700; background: #E8E8E8; }
+        .transp-cell { font-weight: 700; background: #f0f4ff; vertical-align: top; }
         .footer { margin-top: 16px; font-size: 10px; color: #999; text-align: right; }
     </style></head><body>
-    <h1>🚚 Cargas — ${dateStr} (${dayName})</h1>
-    <h2>PSY — Gestão de Estufas | ${cargas.length} carga(s) | Impresso: ${new Date().toLocaleString('pt-PT')}</h2>
+    <h1>Cargas — ${dateStr} (${dayName})</h1>
+    <h2>PSY — Gestao de Estufas | ${blocks.length} entrega(s) | Impresso: ${new Date().toLocaleString('pt-PT')}</h2>
     <table>
     <thead><tr>
-        <th>Horário</th><th>Cliente</th><th>Medida</th><th style="text-align:right;">Qtd</th>
-        <th>Transp.</th><th>Local</th><th>ENC</th><th>NºViagem</th><th>Obs</th>
+        <th>Horario</th><th>Transp.</th><th>Cliente</th><th>Local</th>
+        <th>Medida</th><th style="text-align:right;">Qtd</th><th>ENC</th><th>Obs</th>
     </tr></thead><tbody>`;
 
     sortedSlots.forEach(slot => {
-        grouped[slot].forEach((r, i) => {
-            printHtml += '<tr>';
-            if (i === 0) {
-                printHtml += `<td rowspan="${grouped[slot].length}" style="font-weight:700;vertical-align:top;">${slot}</td>`;
-            }
-            printHtml += `<td>${r.cliente || ''}</td>`;
-            printHtml += `<td>${r.medida || ''}</td>`;
-            printHtml += `<td style="text-align:right;">${r.qtd || ''}</td>`;
-            printHtml += `<td>${r.transp || ''}</td>`;
-            printHtml += `<td>${r.local || ''}</td>`;
-            printHtml += `<td>${r.enc || ''}</td>`;
-            printHtml += `<td>${r.nviagem || ''}</td>`;
-            printHtml += `<td>${r.obs || ''}</td>`;
-            printHtml += '</tr>';
+        grouped[slot].forEach((block, bi) => {
+            block.items.forEach((item, ii) => {
+                printHtml += '<tr>';
+                if (bi === 0 && ii === 0) {
+                    const slotRows = grouped[slot].reduce((s, b) => s + b.items.length, 0);
+                    printHtml += `<td rowspan="${slotRows}" style="font-weight:700;vertical-align:top;">${slot}</td>`;
+                }
+                if (ii === 0) {
+                    printHtml += `<td class="transp-cell" rowspan="${block.items.length}">${block.transp}<br><small>NV: ${block.nviagem || '—'}</small></td>`;
+                }
+                printHtml += `<td>${item.cliente}</td>`;
+                printHtml += `<td>${item.local}</td>`;
+                printHtml += `<td>${item.medida}</td>`;
+                printHtml += `<td style="text-align:right;">${item.qtd}</td>`;
+                printHtml += `<td>${item.enc}</td>`;
+                printHtml += `<td>${item.obs}</td>`;
+                printHtml += '</tr>';
+            });
         });
     });
 
