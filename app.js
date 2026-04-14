@@ -6415,11 +6415,7 @@ async function renderResumoCargas() {
         console.log(`✅ ${cargas.length} cargas com transporte preenchido`);
         console.log('📊 Primeiras 3 cargas:', cargas.slice(0, 3));
         
-        // 🔥 v2.52.2: Sempre começar na SEMANA ATUAL (não na primeira do mês)
-        const startWeekNum = getWeekNumber(today);
-        console.log(`📅 Semana atual: ${startWeekNum} (${today.toLocaleDateString('pt-PT')})`);
-
-        // Criar estrutura de 3 semanas (1ª semana do mês + 2 seguintes)
+        // Criar estrutura de 3 semanas a partir da semana actual
         const weeks = [];
         for (let i = 0; i < 3; i++) {
             const weekNum = startWeekNum + i;
