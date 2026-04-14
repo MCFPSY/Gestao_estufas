@@ -6245,11 +6245,16 @@ async function importPdfData() {
 
             newDatesSorted.forEach(date => {
                 const rowsToSplice = insertsByDate[date].map(r => ({ ...r, _new: true }));
-                // Inserir no INÍCIO do bloco do dia (antes das linhas existentes desse dia)
+                // 🔥 v2.52.3: Inserir no FIM do bloco do dia (após as linhas existentes desse dia)
                 const firstIdx = merged.findIndex(r => r.date === date);
                 if (firstIdx >= 0) {
-                    // Data já existe na BD — inserir antes da primeira linha desse dia
-                    merged.splice(firstIdx, 0, ...rowsToSplice);
+                    // Data já existe na BD — inserir DEPOIS da última linha desse dia
+                    let lastIdx = firstIdx;
+                    for (let i = firstIdx + 1; i < merged.length; i++) {
+                        if (merged[i].date === date) lastIdx = i;
+                        else break;
+                    }
+                    merged.splice(lastIdx + 1, 0, ...rowsToSplice);
                 } else {
                     // Data nova — inserir antes da primeira linha com data posterior
                     let insertBefore = merged.length;
