@@ -1,0 +1,34 @@
+name: Daily Cargas WhatsApp
+
+on:
+  schedule:
+    # 07:45 hora de Lisboa (UTC+1 em inverno, UTC+0 em WEST/verão)
+    # Em abril (WEST): 07:45 local = 06:45 UTC
+    - cron: '45 6 * * 1-5'  # Seg-Sex às 06:45 UTC
+  workflow_dispatch: # Permitir execução manual
+
+jobs:
+  send-cargas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd scripts
+          npm init -y
+          npm install puppeteer @supabase/supabase-js
+
+      - name: Send daily cargas WhatsApp
+        env:
+          TWILIO_SID: ${{ secrets.TWILIO_SID }}
+          TWILIO_TOKEN: ${{ secrets.TWILIO_TOKEN }}
+          TWILIO_FROM: 'whatsapp:+14155238886'
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          WHATSAPP_NUMBERS: ${{ secrets.WHATSAPP_NUMBERS }}
+        run: node scripts/send-cargas-whatsapp.mjs
