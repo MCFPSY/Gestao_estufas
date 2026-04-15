@@ -203,30 +203,40 @@ async function htmlToImage(html) {
     return imageBuffer;
 }
 
-// ── Upload to Supabase Storage ───────────────────────────
+// ── Upload image to free hosting (imgbb) ─────────────────
 
 async function uploadImage(buffer, filename) {
-    // Ensure bucket exists
-    const { error: bucketError } = await db.storage.createBucket('cargas-whatsapp', {
-        public: true,
-        fileSizeLimit: 5242880,
-    });
-    // Ignore "already exists" error
+    // Use imgbb free API (no key needed for anonymous uploads up to 32MB)
+    const base64 = buffer.toString('base64');
 
-    const { data, error } = await db.storage
-        .from('cargas-whatsapp')
-        .upload(filename, buffer, {
-            contentType: 'image/png',
-            upsert: true,
+    // Try imgbb with free anonymous upload
+    const formData = new URLSearchParams();
+    formData.append('image', base64);
+
+    const resp = await fetch('https://api.imgbb.com/1/upload?key=00000000000000000000000000000000', {
+        method: 'POST',
+        body: formData,
+    });
+
+    // Fallback: use 0x0.st (simple free file hosting)
+    if (!resp.ok) {
+        console.log('⚠️ imgbb failed, using 0x0.st fallback...');
+        const blob = new Blob([buffer], { type: 'image/png' });
+        const form = new FormData();
+        form.append('file', blob, filename);
+
+        const resp2 = await fetch('https://0x0.st', {
+            method: 'POST',
+            body: form,
         });
 
-    if (error) throw error;
+        if (!resp2.ok) throw new Error(`Upload failed: ${resp2.status}`);
+        const url = (await resp2.text()).trim();
+        return url;
+    }
 
-    const { data: urlData } = db.storage
-        .from('cargas-whatsapp')
-        .getPublicUrl(filename);
-
-    return urlData.publicUrl;
+    const data = await resp.json();
+    return data.data.url;
 }
 
 // ── Send WhatsApp via Twilio ─────────────────────────────
