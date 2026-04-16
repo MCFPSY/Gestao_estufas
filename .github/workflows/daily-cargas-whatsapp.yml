@@ -2,9 +2,10 @@ name: Daily Cargas WhatsApp
 
 on:
   schedule:
-    # 07:45 hora de Lisboa (UTC+1 em inverno, UTC+0 em WEST/verão)
-    # Em abril (WEST): 07:45 local = 06:45 UTC
-    - cron: '45 6 * * 1-5'  # Seg-Sex às 06:45 UTC
+    # Agendado para 05:30 UTC = 06:30 Lisboa (WEST, UTC+1)
+    # Buffer de 75min para absorver atrasos típicos do GitHub Actions cron
+    # Objectivo: chegar até às 07:45 mesmo com atraso
+    - cron: '30 5 * * 1-5'  # Seg-Sex às 05:30 UTC
   workflow_dispatch: # Permitir execução manual
 
 jobs:
