@@ -2958,9 +2958,11 @@ function renderEncomendasGrid() {
             td.addEventListener('focus', () => {
                 td.style.outline = '2px solid #007AFF';
                 td.style.outlineOffset = '-2px';
-                
+
                 // 👥 FASE 3: Notificar outros utilizadores que estou a editar esta célula
-                updateMyActiveCell(index, field.key);
+                // 🔥 v2.52.4: Usar originalIndex (não index filtrado) para que outros users
+                // consigam encontrar a mesma célula independentemente do filtro aplicado
+                updateMyActiveCell(originalIndex, field.key);
             });
             
             td.addEventListener('blur', () => {
@@ -3151,7 +3153,11 @@ function renderEncomendasGrid() {
     }
     
     console.log('✅ Grid renderizado com sucesso!');
-    
+
+    // 🔥 v2.52.4: Re-aplicar indicadores de células activas de outros utilizadores
+    // (os indicadores são perdidos quando o grid é re-renderizado)
+    try { updateCellIndicators(); } catch(e) { /* presence pode não estar activa */ }
+
     } catch (error) {
         console.error('❌ ERRO ao renderizar grid:', error);
         console.error('Stack trace:', error.stack);
@@ -4165,19 +4171,14 @@ function updateCellIndicators() {
     // Adicionar indicadores para cada utilizador online
     onlineUsers.forEach((presence, userId) => {
         if (!presence.active_cell) return;
-        
+
         const { rowIndex, fieldKey } = presence.active_cell;
-        
-        // Encontrar a célula no DOM
-        const rows = table.querySelectorAll('tbody tr.excel-row');
-        const row = rows[rowIndex];
-        if (!row) return;
-        
-        const fieldIndex = encomendasData.fields.findIndex(f => f.key === fieldKey);
-        if (fieldIndex === -1) return;
-        
-        const cells = row.querySelectorAll('.excel-cell');
-        const cell = cells[fieldIndex];
+
+        // 🔥 v2.52.4: Procurar célula pelo originalIndex (não por posição no DOM)
+        // Assim funciona mesmo com filtros diferentes aplicados entre utilizadores
+        const cell = table.querySelector(
+            `.excel-cell[data-original-index="${rowIndex}"][data-field="${fieldKey}"]`
+        );
         if (!cell) return;
         
         // Adicionar borda colorida
@@ -5651,11 +5652,21 @@ window.handlePdfUpload = async function(event) {
             return;
         }
         
-        // 🔥 v2.52.0: Filtrar clientes LPR e IPP — não importar nem alterar encomendas destes clientes
+        // 🔥 v2.52.0 + v2.52.4: Filtrar clientes LPR e IPP — camadas múltiplas de segurança
+        // 1) Por nome (contém "LPR" ou "IPP")
+        // 2) Por código cliente conhecido (C0068=LPR EUROPE BV, C0570=IPP LOGIPAL)
+        // 3) Por número de documento conhecido (ECL específicos, caso o nome falhe)
         const EXCLUDED_CLIENTS_RE = /\bLPR\b|\bIPP\b/i;
+        const EXCLUDED_CLIENT_CODES = new Set(['C0068', 'C0570']);
         const filteredOrders = orders.filter(o => {
+            // Check 1: name contains LPR/IPP
             if (EXCLUDED_CLIENTS_RE.test(o.cliente)) {
-                console.log(`🚫 Excluído (cliente LPR/IPP): ${o.enc} | ${o.cliente}`);
+                console.log(`🚫 Excluído (nome LPR/IPP): ${o.enc} | ${o.cliente}`);
+                return false;
+            }
+            // Check 2: client code is known LPR/IPP
+            if (o.clientCode && EXCLUDED_CLIENT_CODES.has(o.clientCode)) {
+                console.log(`🚫 Excluído (código cliente ${o.clientCode}): ${o.enc} | ${o.cliente}`);
                 return false;
             }
             return true;
@@ -6003,6 +6014,7 @@ function parseNewPdfFormat(text, parseQtd) {
             orders.push({
                 enc: ecl.doc,
                 cliente: ecl.cliente,
+                clientCode: ecl.clientCode,  // 🆕 v2.52.4: código cliente p/ filtro LPR/IPP
                 data_entrega: ecl.date,
                 medida: prod.desc,
                 qtd: ecl.qtd,
@@ -6139,6 +6151,7 @@ function parsePdfText(rawText) {
             orders.push({
                 enc: ecl.doc,
                 cliente: cliente,
+                clientCode: ecl.clientCode,  // 🆕 v2.52.4: código cliente p/ filtro LPR/IPP
                 data_entrega: ecl.date,
                 medida: prod.desc,
                 qtd: ecl.qtd
@@ -6238,34 +6251,25 @@ async function importPdfData() {
                 (insertsByDate[r.date] = insertsByDate[r.date] || []).push(r);
             });
 
-            // Insert each date's new rows after the last existing row of that same date,
-            // or in chronological position if that date doesn't exist yet in the DB.
-            const merged = [...existing]; // will be mutated
-            const newDatesSorted = Object.keys(insertsByDate).sort((a, b) => dateToNum(a) - dateToNum(b));
+            // 🔥 v2.52.4: Juntar todas as linhas e ORDENAR cronologicamente no fim
+            // Isto garante que dias aparecem em ordem correcta independentemente do estado inicial da BD
+            // Novas linhas vêm no TOPO do dia (antes das existentes) — onde o utilizador quer vê-las
+            const allNewRows = [];
+            Object.keys(insertsByDate).forEach(date => {
+                insertsByDate[date].forEach(r => allNewRows.push({ ...r, _new: true }));
+            });
 
-            newDatesSorted.forEach(date => {
-                const rowsToSplice = insertsByDate[date].map(r => ({ ...r, _new: true }));
-                // 🔥 v2.52.3: Inserir no FIM do bloco do dia (após as linhas existentes desse dia)
-                const firstIdx = merged.findIndex(r => r.date === date);
-                if (firstIdx >= 0) {
-                    // Data já existe na BD — inserir DEPOIS da última linha desse dia
-                    let lastIdx = firstIdx;
-                    for (let i = firstIdx + 1; i < merged.length; i++) {
-                        if (merged[i].date === date) lastIdx = i;
-                        else break;
-                    }
-                    merged.splice(lastIdx + 1, 0, ...rowsToSplice);
-                } else {
-                    // Data nova — inserir antes da primeira linha com data posterior
-                    let insertBefore = merged.length;
-                    for (let i = 0; i < merged.length; i++) {
-                        if (dateToNum(merged[i].date) > dateToNum(date)) {
-                            insertBefore = i;
-                            break;
-                        }
-                    }
-                    merged.splice(insertBefore, 0, ...rowsToSplice);
-                }
+            const merged = [...existing, ...allNewRows];
+
+            // Ordenação final: (1) por data cronológica, (2) dentro do dia: novas primeiro, (3) depois por row_order existente
+            merged.sort((a, b) => {
+                const dateDiff = dateToNum(a.date) - dateToNum(b.date);
+                if (dateDiff !== 0) return dateDiff;
+                // Mesma data: novas primeiro (topo do dia)
+                if (a._new && !b._new) return -1;
+                if (!a._new && b._new) return 1;
+                // Ambas novas ou ambas existentes: preservar ordem relativa
+                return (a.row_order || 0) - (b.row_order || 0);
             });
 
             // Re-number the merged list; collect what changed
