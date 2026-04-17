@@ -1004,102 +1004,238 @@ let selectedCells = [];
 let matrixData = {}; // {cellId: {tipo, mergedCells: [], isGroup: bool}}
 let mergedGroups = []; // [{cells: [], tipo: string}]
 
-// 🔥 v2.52.2: Clipboard interno para copiar/cortar/colar células do Mapa Encomendas
-let _encClipboard = null; // { mode: 'copy'|'cut', cells: [{field, value}], sourceRow: n }
+// 🔥 v2.52.2 + v2.52.5: Clipboard interno para copiar/cortar/colar células do Mapa Encomendas
+// Suporta seleção múltipla (linhas + colunas), formato matriz
+let _encClipboard = null;
+// Formato: {
+//   mode: 'copy'|'cut',
+//   matrix: [ [{field, value}, ...], ...],  // array de linhas, cada linha array de células ordenadas
+//   fields: [field1, field2, ...],           // colunas (ordem das colunas)
+//   sourceRows: [originalIdx, ...]           // linhas de origem (para cut)
+// }
+
+// Seleção de múltiplas células do mapa de encomendas
+let _encSelection = new Set(); // Set de "originalIdx_field"
+let _selectionAnchor = null;   // célula de partida para Shift+click
+
+function _encClearSelection() {
+    document.querySelectorAll('.excel-cell.enc-selected').forEach(c => {
+        c.classList.remove('enc-selected');
+        c.style.background = '';
+    });
+    _encSelection.clear();
+}
+
+function _encSelectCell(cell, additive) {
+    const idx = cell.getAttribute('data-original-index');
+    const field = cell.getAttribute('data-field');
+    if (!idx || !field) return;
+    if (!additive) _encClearSelection();
+    const key = `${idx}_${field}`;
+    _encSelection.add(key);
+    cell.classList.add('enc-selected');
+    cell.style.background = 'rgba(0, 122, 255, 0.18)';
+}
+
+// Registar clicks com Ctrl/Shift para seleção múltipla
+document.addEventListener('mousedown', function(e) {
+    const cell = e.target.closest?.('.excel-cell');
+    if (!cell || !cell.getAttribute('data-original-index')) {
+        if (!e.ctrlKey && !e.metaKey && !e.shiftKey) _encClearSelection();
+        return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        _encSelectCell(cell, true);
+        _selectionAnchor = cell;
+    } else if (e.shiftKey && _selectionAnchor) {
+        e.preventDefault();
+        // Seleccionar rectângulo de anchor até cell actual
+        const a = _selectionAnchor;
+        const aRow = parseInt(a.getAttribute('data-original-index'));
+        const bRow = parseInt(cell.getAttribute('data-original-index'));
+        const aFieldIdx = encomendasData.fields.findIndex(f => f.key === a.getAttribute('data-field'));
+        const bFieldIdx = encomendasData.fields.findIndex(f => f.key === cell.getAttribute('data-field'));
+
+        _encClearSelection();
+        const rowMin = Math.min(aRow, bRow), rowMax = Math.max(aRow, bRow);
+        const fMin = Math.min(aFieldIdx, bFieldIdx), fMax = Math.max(aFieldIdx, bFieldIdx);
+        for (let r = rowMin; r <= rowMax; r++) {
+            for (let f = fMin; f <= fMax; f++) {
+                const fieldKey = encomendasData.fields[f].key;
+                const targetCell = document.querySelector(`.excel-cell[data-original-index="${r}"][data-field="${fieldKey}"]`);
+                if (targetCell) _encSelectCell(targetCell, true);
+            }
+        }
+    } else {
+        // Click normal: limpar selecção mas não impedir foco/edição
+        _encClearSelection();
+        _selectionAnchor = cell;
+    }
+}, true);
 
 // Listener global de teclado para Ctrl+C/X/V no Mapa de Encomendas
 document.addEventListener('keydown', function(e) {
-    // Só actuar se estamos no tab de encomendas e uma célula está focada
     const activeEl = document.activeElement;
-    if (!activeEl || !activeEl.classList.contains('excel-cell')) return;
-    if (!activeEl.getAttribute('data-original-index')) return;
+    const isEncCell = activeEl?.classList?.contains('excel-cell') &&
+                      activeEl?.getAttribute('data-original-index');
+    if (!isEncCell && _encSelection.size === 0) return;
 
     const isCtrl = e.ctrlKey || e.metaKey;
     if (!isCtrl) return;
 
-    const originalIdx = parseInt(activeEl.getAttribute('data-original-index'));
-    const rowIndex = parseInt(activeEl.getAttribute('data-row-index'));
+    // Helper: obter lista de células a copiar — selecção múltipla OU linha inteira focada
+    function getCellsToOperate() {
+        if (_encSelection.size > 0) {
+            // Seleção múltipla: construir matriz por linha
+            const byRow = new Map();
+            _encSelection.forEach(key => {
+                const lastUnderscore = key.lastIndexOf('_');
+                const idx = parseInt(key.substring(0, lastUnderscore));
+                const field = key.substring(lastUnderscore + 1);
+                if (!byRow.has(idx)) byRow.set(idx, new Set());
+                byRow.get(idx).add(field);
+            });
+            const sortedRows = [...byRow.keys()].sort((a, b) => a - b);
+            // Determinar colunas (união de todos os fields seleccionados, por ordem do fields)
+            const allFields = new Set();
+            byRow.forEach(fs => fs.forEach(f => allFields.add(f)));
+            const orderedFields = encomendasData.fields.filter(f => allFields.has(f.key)).map(f => f.key);
+
+            const matrix = sortedRows.map(row => {
+                return orderedFields.map(field => {
+                    const hasField = byRow.get(row).has(field);
+                    return {
+                        field,
+                        value: hasField ? (encomendasData.data[`${row}_${field}`] || '') : null,
+                        skip: !hasField  // célula vazia do rectângulo (não alterar no paste)
+                    };
+                });
+            });
+            return { matrix, fields: orderedFields, sourceRows: sortedRows };
+        }
+        // Fallback: linha inteira da célula focada
+        const originalIdx = parseInt(activeEl.getAttribute('data-original-index'));
+        const row = encomendasData.fields.map(f => ({
+            field: f.key,
+            value: encomendasData.data[`${originalIdx}_${f.key}`] || '',
+            skip: false
+        }));
+        return { matrix: [row], fields: encomendasData.fields.map(f => f.key), sourceRows: [originalIdx] };
+    }
 
     if (e.key === 'c' || e.key === 'C') {
-        // Ctrl+C: Copiar toda a linha (todos os campos editáveis)
         e.preventDefault();
-        const cells = [];
-        encomendasData.fields.forEach(f => {
-            const val = encomendasData.data[`${originalIdx}_${f.key}`] || '';
-            cells.push({ field: f.key, value: val });
-        });
-        _encClipboard = { mode: 'copy', cells, sourceRow: originalIdx };
-        showToast(`📋 Linha ${rowIndex + 1} copiada (${cells.filter(c => c.value).length} campos)`, 'info');
+        e.stopPropagation();
+        const { matrix, fields, sourceRows } = getCellsToOperate();
+        _encClipboard = { mode: 'copy', matrix, fields, sourceRows };
+        // Também copiar para o clipboard do sistema (para poder colar noutras apps)
+        const tsv = matrix.map(row => row.map(c => c.skip ? '' : (c.value || '')).join('\t')).join('\n');
+        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(tsv).catch(() => {});
+        const cellCount = matrix.reduce((s, row) => s + row.filter(c => !c.skip).length, 0);
+        showToast(`📋 ${cellCount} célula(s) de ${matrix.length} linha(s) copiadas`, 'info');
     }
 
     if (e.key === 'x' || e.key === 'X') {
-        // Ctrl+X: Cortar toda a linha
         e.preventDefault();
-        const cells = [];
-        encomendasData.fields.forEach(f => {
-            const val = encomendasData.data[`${originalIdx}_${f.key}`] || '';
-            cells.push({ field: f.key, value: val });
+        e.stopPropagation();
+        const { matrix, fields, sourceRows } = getCellsToOperate();
+        _encClipboard = { mode: 'cut', matrix, fields, sourceRows };
+        const tsv = matrix.map(row => row.map(c => c.skip ? '' : (c.value || '')).join('\t')).join('\n');
+        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(tsv).catch(() => {});
+        // Marcar visualmente origem
+        sourceRows.forEach(idx => {
+            fields.forEach(f => {
+                const c = document.querySelector(`.excel-cell[data-original-index="${idx}"][data-field="${f}"]`);
+                if (c) c.style.opacity = '0.4';
+            });
         });
-        _encClipboard = { mode: 'cut', cells, sourceRow: originalIdx };
-        // Marcar visualmente a linha de origem
-        document.querySelectorAll(`.excel-cell[data-original-index="${originalIdx}"]`).forEach(c => {
-            c.style.opacity = '0.4';
-        });
-        showToast(`✂️ Linha ${rowIndex + 1} cortada`, 'info');
+        showToast(`✂️ ${matrix.length} linha(s) cortadas`, 'info');
     }
 
     if ((e.key === 'v' || e.key === 'V') && _encClipboard) {
-        // Ctrl+V: Colar na linha actual
         e.preventDefault();
-        const targetOriginalIdx = originalIdx;
+        e.stopPropagation();
 
-        // Não colar sobre a própria linha de origem (cut)
-        if (_encClipboard.mode === 'cut' && _encClipboard.sourceRow === targetOriginalIdx) {
-            showToast('⚠️ Não pode colar na mesma linha de origem', 'warning');
-            return;
-        }
+        // Destino: célula focada como canto superior esquerdo
+        const targetCell = activeEl?.classList?.contains('excel-cell') ? activeEl :
+                           document.querySelector('.excel-cell[data-original-index]');
+        if (!targetCell) return;
 
-        // Colar cada campo (excepto 'sem' que é calculado automaticamente)
-        _encClipboard.cells.forEach(({ field, value }) => {
-            if (field === 'sem') return; // Não sobrescrever semana
-            const dataKey = `${targetOriginalIdx}_${field}`;
-            encomendasData.data[dataKey] = value;
-            queueSave(targetOriginalIdx, field, value);
+        const targetStartIdx = parseInt(targetCell.getAttribute('data-original-index'));
+        const targetStartField = targetCell.getAttribute('data-field');
+        const targetFieldStartIdx = encomendasData.fields.findIndex(f => f.key === targetStartField);
 
-            // Actualizar visualmente
-            const cell = document.querySelector(`.excel-cell[data-original-index="${targetOriginalIdx}"][data-field="${field}"]`);
-            if (cell) {
-                if (cell.contentEditable === 'true') {
-                    cell.textContent = value;
-                } else {
-                    // Select (horario_carga)
-                    const sel = cell.querySelector('select');
-                    if (sel) sel.value = value;
+        // Colar a matriz com o canto superior esquerdo na célula focada
+        const { matrix, fields: srcFields } = _encClipboard;
+
+        // Mapear datas actuais para obter originalIndex a partir de row offset
+        // Construir lista ORDENADA de originalIndex a partir do grid actual (visíveis)
+        const visibleCells = document.querySelectorAll('.excel-cell[data-original-index]');
+        const visibleRows = [...new Set([...visibleCells].map(c => parseInt(c.getAttribute('data-original-index'))))];
+        visibleRows.sort((a, b) => {
+            // Preservar ordem do DOM (row-index para ordenação)
+            const aCell = document.querySelector(`.excel-cell[data-original-index="${a}"]`);
+            const bCell = document.querySelector(`.excel-cell[data-original-index="${b}"]`);
+            return parseInt(aCell?.getAttribute('data-row-index') || 0) -
+                   parseInt(bCell?.getAttribute('data-row-index') || 0);
+        });
+        const targetRowPos = visibleRows.indexOf(targetStartIdx);
+        if (targetRowPos < 0) { showToast('❌ Erro ao colar: linha destino não encontrada', 'error'); return; }
+
+        let pastedCount = 0;
+        matrix.forEach((row, rowOffset) => {
+            const destRowPos = targetRowPos + rowOffset;
+            if (destRowPos >= visibleRows.length) return;
+            const destOriginalIdx = visibleRows[destRowPos];
+
+            row.forEach((cellData, colOffset) => {
+                if (cellData.skip) return;
+                const destFieldIdx = targetFieldStartIdx + colOffset;
+                if (destFieldIdx >= encomendasData.fields.length) return;
+                const destField = encomendasData.fields[destFieldIdx].key;
+                if (destField === 'sem') return; // nunca sobrescrever semana
+
+                const value = cellData.value || '';
+                const dataKey = `${destOriginalIdx}_${destField}`;
+                encomendasData.data[dataKey] = value;
+                queueSave(destOriginalIdx, destField, value);
+
+                const destCell = document.querySelector(`.excel-cell[data-original-index="${destOriginalIdx}"][data-field="${destField}"]`);
+                if (destCell) {
+                    if (destCell.contentEditable === 'true') destCell.textContent = value;
+                    else { const sel = destCell.querySelector('select'); if (sel) sel.value = value; }
                 }
-            }
+                pastedCount++;
+            });
         });
 
-        // Se foi CUT, limpar a linha de origem
+        // Se foi CUT, limpar origem
         if (_encClipboard.mode === 'cut') {
-            const srcIdx = _encClipboard.sourceRow;
-            _encClipboard.cells.forEach(({ field }) => {
-                if (field === 'sem') return;
-                encomendasData.data[`${srcIdx}_${field}`] = '';
-                queueSave(srcIdx, field, '');
-                const srcCell = document.querySelector(`.excel-cell[data-original-index="${srcIdx}"][data-field="${field}"]`);
-                if (srcCell) {
-                    srcCell.style.opacity = '1';
-                    if (srcCell.contentEditable === 'true') srcCell.textContent = '';
-                    else { const sel = srcCell.querySelector('select'); if (sel) sel.value = ''; }
-                }
+            _encClipboard.sourceRows.forEach(idx => {
+                _encClipboard.fields.forEach(field => {
+                    if (field === 'sem') return;
+                    // Apenas limpar se era célula não-skip na matriz original
+                    const rowInMatrix = _encClipboard.matrix[_encClipboard.sourceRows.indexOf(idx)];
+                    const cellInfo = rowInMatrix?.find(c => c.field === field);
+                    if (!cellInfo || cellInfo.skip) return;
+                    encomendasData.data[`${idx}_${field}`] = '';
+                    queueSave(idx, field, '');
+                    const src = document.querySelector(`.excel-cell[data-original-index="${idx}"][data-field="${field}"]`);
+                    if (src) {
+                        src.style.opacity = '1';
+                        if (src.contentEditable === 'true') src.textContent = '';
+                        else { const sel = src.querySelector('select'); if (sel) sel.value = ''; }
+                    }
+                });
             });
-            _encClipboard = null; // Cut é one-shot
-            showToast(`✅ Linha colada e origem limpa`, 'success');
+            _encClipboard = null;
+            showToast(`✅ ${pastedCount} célula(s) movidas`, 'success');
         } else {
-            showToast(`✅ Linha colada (Ctrl+V para colar noutro sítio)`, 'success');
+            showToast(`✅ ${pastedCount} célula(s) coladas (Ctrl+V para colar mais)`, 'success');
         }
     }
-});
+}, true); // useCapture: true para intercetar antes do listener por-célula
 
 function initMatrixSystem() {
     console.log('🔧 INIT MATRIX SYSTEM!');
@@ -1939,18 +2075,31 @@ function startAutoRefresh() {
     
     autoRefreshInterval = setInterval(() => {
         const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+
+        // 🔥 v2.52.5: NUNCA recarregar se o utilizador está a editar
+        //    - Célula com foco
+        //    - Saves pendentes
+        //    - Ou cópia a decorrer
+        const editingCell = document.activeElement?.classList?.contains('excel-cell');
+        const hasPendingSaves = typeof saveQueue !== 'undefined' && saveQueue.size > 0;
+        const isSaving = typeof window._isSaving !== 'undefined' && window._isSaving;
+
+        if (editingCell || hasPendingSaves || isSaving) {
+            console.log(`⏸️ Auto-refresh SKIPPED (editing=${!!editingCell}, pending=${hasPendingSaves}, saving=${isSaving})`);
+            return;
+        }
+
         console.log(`%c🔄 AUTO-REFRESH EXECUTADO (tab: ${activeTab})`, 'background: #34C759; color: white; font-size: 14px; font-weight: bold; padding: 5px;');
-        
-        // Flash FORTE no indicador
+
         if (indicator) {
             indicator.style.opacity = '1';
             indicator.style.transform = 'scale(1.3)';
-            setTimeout(() => { 
+            setTimeout(() => {
                 indicator.style.opacity = '0.5';
                 indicator.style.transform = 'scale(1)';
             }, 800);
         }
-        
+
         switch(activeTab) {
             case 'planeamento':
                 loadAllData();
@@ -1959,7 +2108,11 @@ function startAutoRefresh() {
                 loadAllData().then(() => loadDashboard());
                 break;
             case 'encomendas':
-                loadEncomendasData().then(() => renderEncomendasGrid());
+                // 🔥 v2.52.5: No mapa de encomendas, o Realtime já sincroniza alterações.
+                // Auto-refresh pesado é desnecessário e destrutivo. Só recarregar se não houver Realtime.
+                if (typeof isRealtimeActive === 'undefined' || !isRealtimeActive) {
+                    loadEncomendasData().then(() => renderEncomendasGrid());
+                }
                 break;
             case 'calendario':
                 loadEncomendasData().then(() => renderCalendario());
@@ -3016,9 +3169,15 @@ function renderEncomendasGrid() {
             
             // ===== 🔥 v2.51.36 COPY/PASTE EXCEL =====
             td.addEventListener('paste', function(e) {
+                // 🔥 v2.52.5: Se o clipboard INTERNO está activo, o listener global já tratou
+                // tudo — evitar duplo-paste que causa conteúdo desactualizado
+                if (_encClipboard) {
+                    e.preventDefault();
+                    return;
+                }
                 e.preventDefault();
                 const pastedText = (e.clipboardData || window.clipboardData).getData('text');
-                
+
                 // Detectar se é texto multi-célula do Excel (tabs = colunas, \n = linhas)
                 const rows = pastedText.split('\n').filter(r => r.trim());
                 if (rows.length === 0) return;
