@@ -6003,11 +6003,17 @@ function parseNewPdfFormat(text, parseQtd) {
     }
     console.log(`✅ [NOVO] ${prodMatches.length} produtos encontrados`);
 
-    // 4. Associar ECLs ao produto seguinte (mesma lógica do parser antigo)
+    // 4. Associar ECLs ao produto seguinte
+    // 🔥 v2.52.5: Filtrar por secção de cliente — evita que ECLs "residuais" (ex: SERV_TRANSP
+    // com qty=1) de um cliente sejam associadas ao produto da secção do cliente seguinte.
     prodMatches.forEach((prod, pi) => {
         const prevEnd = pi > 0 ? prodMatches[pi - 1].end : 0;
+        const prodSection = getClientAtPos(prod.pos);
         const relatedEcls = eclMatches.filter(e =>
-            e.pos >= prevEnd && e.pos < prod.pos
+            e.pos >= prevEnd &&
+            e.pos < prod.pos &&
+            // ECL e produto têm de estar na MESMA secção de cliente
+            (prodSection === null || e.clientCode === prodSection)
         );
 
         relatedEcls.forEach(ecl => {
