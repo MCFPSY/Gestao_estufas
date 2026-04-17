@@ -4159,52 +4159,76 @@ async function clearMyActiveCell() {
 // Atualizar indicadores visuais nas células
 function updateCellIndicators() {
     const table = document.getElementById('encomendas-grid');
-    if (!table) return;
-    
+    if (!table) {
+        console.log('🎨 [indicators] Sem grid, skip');
+        return;
+    }
+
     // Limpar todos os indicadores anteriores
-    table.querySelectorAll('.user-indicator').forEach(el => el.remove());
-    table.querySelectorAll('.excel-cell').forEach(cell => {
+    table.querySelectorAll('.user-indicator, .user-label').forEach(el => el.remove());
+    table.querySelectorAll('.excel-cell.peer-editing').forEach(cell => {
+        cell.classList.remove('peer-editing');
+        cell.style.removeProperty('--peer-color');
         cell.style.boxShadow = '';
         cell.style.outline = '';
+        cell.style.background = '';
     });
-    
+
+    console.log(`🎨 [indicators] Aplicando para ${onlineUsers.size} utilizadores online`);
+
     // Adicionar indicadores para cada utilizador online
     onlineUsers.forEach((presence, userId) => {
-        if (!presence.active_cell) return;
+        if (!presence.active_cell) {
+            console.log(`   - ${presence.user_name || userId}: sem célula activa`);
+            return;
+        }
 
         const { rowIndex, fieldKey } = presence.active_cell;
+        console.log(`   📍 ${presence.user_name || userId} (${presence.color}) a editar row=${rowIndex} field=${fieldKey}`);
 
         // 🔥 v2.52.4: Procurar célula pelo originalIndex (não por posição no DOM)
-        // Assim funciona mesmo com filtros diferentes aplicados entre utilizadores
         const cell = table.querySelector(
             `.excel-cell[data-original-index="${rowIndex}"][data-field="${fieldKey}"]`
         );
-        if (!cell) return;
+        if (!cell) {
+            console.warn(`   ⚠️ Célula não encontrada: [data-original-index="${rowIndex}"][data-field="${fieldKey}"]`);
+            return;
+        }
+        console.log(`   ✅ Célula encontrada, aplicando borda cor ${presence.color}`);
         
-        // Adicionar borda colorida
+        // Borda colorida grossa + fundo semi-transparente para máxima visibilidade
+        cell.classList.add('peer-editing');
+        cell.style.setProperty('--peer-color', presence.color);
         cell.style.outline = `3px solid ${presence.color}`;
         cell.style.outlineOffset = '-3px';
-        cell.style.boxShadow = `0 0 8px ${presence.color}`;
-        
-        // Adicionar avatar/indicador
+        cell.style.boxShadow = `inset 0 0 0 2px ${presence.color}, 0 0 12px ${presence.color}`;
+
+        // Fundo levemente colorido (converter hex para rgba)
+        const hex = presence.color.replace('#', '');
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        cell.style.background = `rgba(${r}, ${g}, ${b}, 0.12)`;
+
+        // Avatar no canto superior direito
         const indicator = document.createElement('div');
         indicator.className = 'user-indicator';
         indicator.style.cssText = `
             position: absolute;
-            top: -10px;
-            right: -10px;
-            width: 24px;
-            height: 24px;
+            top: -12px;
+            right: -8px;
+            width: 28px;
+            height: 28px;
             background: ${presence.color};
             color: white;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 10px;
+            font-size: 11px;
             font-weight: bold;
             border: 2px solid white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
             z-index: 100;
             pointer-events: none;
         `;
