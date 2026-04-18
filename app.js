@@ -4336,23 +4336,33 @@ function setupPresence() {
         last_seen: new Date().toISOString()
     };
     
-    // Track presence state (quem está online)
+    // Track presence state (quem está online) — sync inicial / join / leave
     presenceChannel.on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
-        console.log('👥 Presença sincronizada:', state);
-        
-        // Atualizar mapa de utilizadores online
-        onlineUsers.clear();
-        
+        console.log('👥 Presença sincronizada:', Object.keys(state).length, 'users');
+
+        // 🔥 v2.52.7: Mergear com dados existentes (preservar active_cell vindo por broadcast)
+        const seenUserIds = new Set();
         Object.entries(state).forEach(([userId, presences]) => {
-            // Cada utilizador pode ter múltiplas presenças (múltiplas tabs)
-            // Usar a primeira
+            if (userId === currentUser.id) return;
+            seenUserIds.add(userId);
             const presence = presences[0];
-            if (presence && userId !== currentUser.id) {
-                onlineUsers.set(userId, presence);
-            }
+            if (!presence) return;
+            const existing = onlineUsers.get(userId) || {};
+            onlineUsers.set(userId, {
+                ...existing,
+                user_name: presence.user_name,
+                user_email: presence.user_email,
+                color: presence.color,
+                // preservar active_cell vindo por broadcast (não resetar!)
+                active_cell: existing.active_cell !== undefined ? existing.active_cell : presence.active_cell,
+            });
         });
-        
+        // Remover users que já não estão online
+        [...onlineUsers.keys()].forEach(uid => {
+            if (!seenUserIds.has(uid)) onlineUsers.delete(uid);
+        });
+
         console.log('👥 Utilizadores online:', onlineUsers.size);
         updateOnlineUsersList();
         updateCellIndicators();
@@ -4367,54 +4377,96 @@ function setupPresence() {
     
     presenceChannel.on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
         console.log('👋 Utilizador saiu:', key, leftPresences);
-        // showToast(`👋 ${leftPresences[0].user_name} saiu`, 'info');  ← DESATIVADO: muito ruído
+        // Remover active_cell quando user sai (evitar borda "fantasma")
+        onlineUsers.delete(key);
         updateOnlineUsersList();
         updateCellIndicators();
     });
-    
+
+    // 🆕 v2.52.7: Usar BROADCAST para actualizações de cursor (em tempo real, sem throttling de Presence)
+    presenceChannel.on('broadcast', { event: 'cursor' }, (msg) => {
+        const { userId, active_cell, color, user_name } = msg.payload || {};
+        if (!userId || userId === currentUser?.id) return; // ignorar self
+
+        // Actualizar/criar entrada no onlineUsers
+        const existing = onlineUsers.get(userId) || {};
+        onlineUsers.set(userId, {
+            ...existing,
+            user_name: user_name || existing.user_name || 'Utilizador',
+            color: color || existing.color || '#ff9500',
+            active_cell
+        });
+        updateCellIndicators();
+    });
+
     // Subscribe e fazer track do estado
     presenceChannel.subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
             console.log('✅ Presença ativa!');
-            
-            // Enviar estado inicial
             await presenceChannel.track(myPresenceState);
-            
+
+            // 🆕 v2.52.7: Broadcast inicial do meu estado (caso tenha célula activa)
+            if (currentActiveCell) {
+                await presenceChannel.send({
+                    type: 'broadcast',
+                    event: 'cursor',
+                    payload: {
+                        userId: currentUser.id,
+                        user_name: myPresenceState.user_name,
+                        color: myPresenceState.color,
+                        active_cell: currentActiveCell
+                    }
+                });
+            }
             showToast('👥 Sistema de presença ativo', 'success');
         }
     });
 }
 
-// Atualizar célula ativa do utilizador atual
+// 🆕 v2.52.7: Usar BROADCAST para cursor (muito mais rápido e sem throttling de Presence)
 async function updateMyActiveCell(rowIndex, fieldKey) {
     if (!presenceChannel || !myPresenceState) return;
-    
+
     currentActiveCell = { rowIndex, fieldKey };
-    
-    myPresenceState.active_cell = currentActiveCell;
-    myPresenceState.last_seen = new Date().toISOString();
-    
+
+    // Broadcast imediato para todos os peers
     try {
-        await presenceChannel.track(myPresenceState);
-        console.log('📍 Célula ativa atualizada:', rowIndex, fieldKey);
+        await presenceChannel.send({
+            type: 'broadcast',
+            event: 'cursor',
+            payload: {
+                userId: currentUser.id,
+                user_name: myPresenceState.user_name,
+                color: myPresenceState.color,
+                active_cell: currentActiveCell
+            }
+        });
+        console.log('📍 Cursor enviado:', rowIndex, fieldKey);
     } catch (error) {
-        console.warn('⚠️ Erro ao atualizar presença:', error);
+        console.warn('⚠️ Erro ao enviar cursor:', error);
     }
 }
 
 // Limpar célula ativa (quando utilizador sai da célula)
 async function clearMyActiveCell() {
     if (!presenceChannel || !myPresenceState) return;
-    
+
     currentActiveCell = null;
-    myPresenceState.active_cell = null;
-    myPresenceState.last_seen = new Date().toISOString();
-    
+
+    // 🆕 v2.52.7: Broadcast para limpar o cursor dos outros users
     try {
-        await presenceChannel.track(myPresenceState);
-        console.log('📍 Célula ativa limpa');
+        await presenceChannel.send({
+            type: 'broadcast',
+            event: 'cursor',
+            payload: {
+                userId: currentUser.id,
+                user_name: myPresenceState.user_name,
+                color: myPresenceState.color,
+                active_cell: null
+            }
+        });
     } catch (error) {
-        console.warn('⚠️ Erro ao limpar presença:', error);
+        console.warn('⚠️ Erro ao limpar cursor:', error);
     }
 }
 
