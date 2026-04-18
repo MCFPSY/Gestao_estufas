@@ -1709,6 +1709,44 @@
             outline: 2px solid #007AFF !important;
             background: rgba(0, 122, 255, 0.05) !important;
         }
+
+        /* 🆕 v2.52.6: Indicador de célula editada por outro utilizador (presence) */
+        /* Usa !important para bater os estilos default da .excel-cell */
+        .excel-cell.peer-editing {
+            outline: 4px solid var(--peer-color, #ff9500) !important;
+            outline-offset: -4px !important;
+            box-shadow: inset 0 0 0 2px var(--peer-color, #ff9500), 0 0 12px var(--peer-color, #ff9500) !important;
+            position: relative !important;
+            z-index: 2;
+        }
+
+        .excel-cell.peer-editing::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: var(--peer-color, #ff9500);
+            opacity: 0.15;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .excel-cell.enc-selected {
+            outline: 2px solid #007AFF !important;
+            outline-offset: -2px;
+            background: rgba(0, 122, 255, 0.18) !important;
+        }
+
+        .user-indicator {
+            font-family: -apple-system, 'Segoe UI', Arial, sans-serif;
+        }
+
+        /* Combobox TRANSP */
+        .transp-input {
+            font-family: inherit;
+        }
+        .transp-input:focus {
+            background: rgba(0, 122, 255, 0.05) !important;
+        }
         
         /* 🔥 v2.51.34c: Célula destacada em amarelo */
         .excel-cell-highlighted {
