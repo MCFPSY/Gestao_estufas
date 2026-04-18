@@ -3129,16 +3129,17 @@ function renderEncomendasGrid() {
                 
                 td.appendChild(select);
             }
-            // 🆕 v2.52.6: Campo TRANSP como combobox com autocomplete
+            // 🆕 v2.52.6 + v2.52.8: Campo TRANSP como combobox custom (abre ao focus, filtra ao escrever)
             else if (field.key === 'transp') {
                 td.contentEditable = 'false';
                 td.style.padding = '0';
+                td.style.position = 'relative';
 
                 const transpInput = document.createElement('input');
                 transpInput.type = 'text';
                 transpInput.className = 'transp-input';
-                transpInput.setAttribute('list', 'transp-datalist');
                 transpInput.value = value;
+                transpInput.setAttribute('autocomplete', 'off');
                 transpInput.style.cssText = `
                     width: 100%; height: 100%; min-height: 28px;
                     border: none; background: ${field.color};
@@ -3146,7 +3147,59 @@ function renderEncomendasGrid() {
                     outline: none; box-sizing: border-box;
                 `;
 
-                transpInput.addEventListener('change', () => {
+                // Dropdown (criado on-demand)
+                let dropdown = null;
+                const closeDropdown = () => {
+                    if (dropdown) { dropdown.remove(); dropdown = null; }
+                };
+                const openDropdown = () => {
+                    closeDropdown();
+                    const rect = transpInput.getBoundingClientRect();
+                    dropdown = document.createElement('div');
+                    dropdown.className = 'transp-dropdown';
+                    dropdown.style.cssText = `
+                        position: fixed;
+                        top: ${rect.bottom}px;
+                        left: ${rect.left}px;
+                        width: ${Math.max(rect.width, 260)}px;
+                        max-height: 300px;
+                        overflow-y: auto;
+                        background: white;
+                        border: 1px solid #D1D1D6;
+                        border-radius: 6px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                        z-index: 10000;
+                        font-size: 12px;
+                    `;
+                    document.body.appendChild(dropdown);
+                    renderDropdown(transpInput.value || '');
+                };
+                const renderDropdown = (filter) => {
+                    if (!dropdown) return;
+                    const f = filter.toLowerCase().trim();
+                    const matches = (_transportadoresCache || []).filter(n => n.toLowerCase().includes(f));
+                    if (matches.length === 0) {
+                        dropdown.innerHTML = `<div style="padding:8px 12px;color:#999;font-style:italic;">Sem resultados. Enter para guardar "${transpInput.value}" como novo.</div>`;
+                        return;
+                    }
+                    dropdown.innerHTML = matches.slice(0, 50).map((n, i) => {
+                        const escaped = n.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        return `<div class="transp-option" data-value="${n.replace(/"/g, '&quot;')}" style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #F0F0F0;">${escaped}</div>`;
+                    }).join('');
+                    dropdown.querySelectorAll('.transp-option').forEach(el => {
+                        el.onmouseenter = () => el.style.background = '#E8F4FD';
+                        el.onmouseleave = () => el.style.background = '';
+                        el.onmousedown = (e) => {
+                            e.preventDefault(); // prevent blur
+                            transpInput.value = el.getAttribute('data-value');
+                            transpInput.dispatchEvent(new Event('change'));
+                            closeDropdown();
+                            transpInput.blur();
+                        };
+                    });
+                };
+
+                const saveValue = () => {
                     const oldValue = encomendasData.data[cellKey] || '';
                     const newValue = transpInput.value.trim();
                     if (oldValue !== newValue) {
@@ -3158,21 +3211,36 @@ function renderEncomendasGrid() {
                             row_order: originalIdx
                         });
                         queueSave(originalIdx, field.key, newValue);
-                        // Se é um nome novo, adicionar à BD de transportadores
                         if (newValue && typeof saveNewTransportador === 'function') {
                             saveNewTransportador(newValue);
                         }
                     }
-                });
+                };
 
                 transpInput.addEventListener('focus', () => {
                     td.style.outline = '2px solid #007AFF';
                     td.style.outlineOffset = '-2px';
                     updateMyActiveCell(originalIndex, field.key);
+                    openDropdown();
+                });
+                transpInput.addEventListener('input', () => {
+                    if (!dropdown) openDropdown();
+                    else renderDropdown(transpInput.value || '');
                 });
                 transpInput.addEventListener('blur', () => {
                     td.style.outline = 'none';
+                    closeDropdown();
+                    saveValue();
                     clearMyActiveCell();
+                });
+                transpInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        transpInput.blur();
+                    } else if (e.key === 'Escape') {
+                        closeDropdown();
+                        transpInput.blur();
+                    }
                 });
 
                 td.appendChild(transpInput);
