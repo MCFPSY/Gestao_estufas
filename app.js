@@ -151,6 +151,58 @@ function getSecagemCode(sec) {
 let currentUser = null;
 let userPermissions = {};
 
+// 🆕 v2.52.6: Cache e helpers de transportadores (para combobox autocomplete)
+let _transportadoresCache = [];
+
+async function loadTransportadores() {
+    try {
+        const { data, error } = await db.from('transportadores').select('nome').eq('ativo', true).order('nome');
+        if (error) {
+            console.warn('⚠️ Tabela transportadores não disponível:', error.message);
+            return [];
+        }
+        _transportadoresCache = (data || []).map(r => r.nome);
+        console.log(`🚚 ${_transportadoresCache.length} transportadores carregados`);
+        refreshTranspDatalist();
+        return _transportadoresCache;
+    } catch (e) {
+        console.warn('⚠️ Erro ao carregar transportadores:', e);
+        return [];
+    }
+}
+
+function refreshTranspDatalist() {
+    let datalist = document.getElementById('transp-datalist');
+    if (!datalist) {
+        datalist = document.createElement('datalist');
+        datalist.id = 'transp-datalist';
+        document.body.appendChild(datalist);
+    }
+    datalist.innerHTML = _transportadoresCache
+        .map(n => `<option value="${n.replace(/"/g, '&quot;')}"></option>`).join('');
+}
+
+async function saveNewTransportador(nome) {
+    if (!nome) return;
+    const trimmed = nome.trim();
+    if (!trimmed) return;
+    // Já existe em cache? Não inserir
+    if (_transportadoresCache.some(n => n.toLowerCase() === trimmed.toLowerCase())) return;
+    try {
+        const { error } = await db.from('transportadores').insert({ nome: trimmed });
+        if (error && error.code !== '23505') { // 23505 = duplicate key
+            console.warn('⚠️ Erro ao guardar transportador novo:', error.message);
+            return;
+        }
+        _transportadoresCache.push(trimmed);
+        _transportadoresCache.sort();
+        refreshTranspDatalist();
+        console.log(`✅ Novo transportador guardado: ${trimmed}`);
+    } catch (e) {
+        console.warn('⚠️ Erro ao guardar transportador:', e);
+    }
+}
+
 // 🔐 v2.52.0: Funções helper de permissões
 function canEdit(tabId) {
     // Admin tem acesso total
@@ -3076,6 +3128,57 @@ function renderEncomendasGrid() {
                 });
                 
                 td.appendChild(select);
+            }
+            // 🆕 v2.52.6: Campo TRANSP como combobox com autocomplete
+            else if (field.key === 'transp') {
+                td.contentEditable = 'false';
+                td.style.padding = '0';
+
+                const transpInput = document.createElement('input');
+                transpInput.type = 'text';
+                transpInput.className = 'transp-input';
+                transpInput.setAttribute('list', 'transp-datalist');
+                transpInput.value = value;
+                transpInput.style.cssText = `
+                    width: 100%; height: 100%; min-height: 28px;
+                    border: none; background: ${field.color};
+                    padding: 6px 8px; font-size: 11px;
+                    outline: none; box-sizing: border-box;
+                `;
+
+                transpInput.addEventListener('change', () => {
+                    const oldValue = encomendasData.data[cellKey] || '';
+                    const newValue = transpInput.value.trim();
+                    if (oldValue !== newValue) {
+                        encomendasData.data[cellKey] = newValue;
+                        const originalIdx = parseInt(td.getAttribute('data-original-index'));
+                        logHistory('UPDATE', {
+                            date, field_name: field.key,
+                            old_value: oldValue, new_value: newValue,
+                            row_order: originalIdx
+                        });
+                        queueSave(originalIdx, field.key, newValue);
+                        // Se é um nome novo, adicionar à BD de transportadores
+                        if (newValue && typeof saveNewTransportador === 'function') {
+                            saveNewTransportador(newValue);
+                        }
+                    }
+                });
+
+                transpInput.addEventListener('focus', () => {
+                    td.style.outline = '2px solid #007AFF';
+                    td.style.outlineOffset = '-2px';
+                    updateMyActiveCell(originalIndex, field.key);
+                });
+                transpInput.addEventListener('blur', () => {
+                    td.style.outline = 'none';
+                    clearMyActiveCell();
+                });
+
+                td.appendChild(transpInput);
+                td.addEventListener('click', (e) => {
+                    if (e.target === td) transpInput.focus();
+                });
             } else {
                 // Célula editável normal
                 td.contentEditable = 'true';
@@ -3106,7 +3209,7 @@ function renderEncomendasGrid() {
                     }
                 });
             }
-            
+
             // Foco visual + tracking de presença
             td.addEventListener('focus', () => {
                 td.style.outline = '2px solid #007AFF';
@@ -4328,9 +4431,6 @@ function updateCellIndicators() {
     table.querySelectorAll('.excel-cell.peer-editing').forEach(cell => {
         cell.classList.remove('peer-editing');
         cell.style.removeProperty('--peer-color');
-        cell.style.boxShadow = '';
-        cell.style.outline = '';
-        cell.style.background = '';
     });
 
     console.log(`🎨 [indicators] Aplicando para ${onlineUsers.size} utilizadores online`);
@@ -4354,20 +4454,11 @@ function updateCellIndicators() {
             return;
         }
         console.log(`   ✅ Célula encontrada, aplicando borda cor ${presence.color}`);
-        
-        // Borda colorida grossa + fundo semi-transparente para máxima visibilidade
+
+        // 🆕 v2.52.6: Apenas classe + CSS var — os estilos vêm do CSS com !important
+        // (evita sobreposição pelos estilos default da .excel-cell)
         cell.classList.add('peer-editing');
         cell.style.setProperty('--peer-color', presence.color);
-        cell.style.outline = `3px solid ${presence.color}`;
-        cell.style.outlineOffset = '-3px';
-        cell.style.boxShadow = `inset 0 0 0 2px ${presence.color}, 0 0 12px ${presence.color}`;
-
-        // Fundo levemente colorido (converter hex para rgba)
-        const hex = presence.color.replace('#', '');
-        const r = parseInt(hex.substring(0, 2), 16);
-        const g = parseInt(hex.substring(2, 4), 16);
-        const b = parseInt(hex.substring(4, 6), 16);
-        cell.style.background = `rgba(${r}, ${g}, ${b}, 0.12)`;
 
         // Avatar no canto superior direito
         const indicator = document.createElement('div');
@@ -7526,6 +7617,8 @@ function executePrintCargas() {
 console.log('%c🚀 INICIALIZANDO SISTEMA...', 'background: #5AC8FA; color: white; font-size: 16px; padding: 5px;');
 checkAuthState();
 initMatrixSystem();
+// 🆕 v2.52.6: Carregar lista de transportadores em background
+loadTransportadores();
 
 // Iniciar auto-refresh após 5 segundos (dar tempo para carregar dados)
 setTimeout(() => {
