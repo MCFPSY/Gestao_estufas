@@ -328,9 +328,21 @@ function showApp() {
     document.getElementById('app').style.display = 'block';
     const initials = currentUser.email.substring(0, 2).toUpperCase();
     document.getElementById('user-avatar').textContent = initials;
-    
+
     // Setup navegação do Gantt
     setupGanttNavigation();
+
+    // 🆕 v2.52.9: Tab default por utilizador
+    // Catarina, Anabela e Goncalo abrem directamente no Mapa de Encomendas
+    const username = (currentUser.email || '').split('@')[0].toLowerCase();
+    const MAPA_ENCOMENDAS_USERS = ['catarina', 'anabela', 'goncalo'];
+    if (MAPA_ENCOMENDAS_USERS.includes(username)) {
+        const encomendasBtn = document.querySelector('[data-tab="encomendas"]');
+        if (encomendasBtn) {
+            console.log(`🎯 Tab default para ${username}: Mapa de Encomendas`);
+            setTimeout(() => encomendasBtn.click(), 100);
+        }
+    }
 }
 
 // 🔐 v2.52.0: Aplicar permissões na UI
@@ -3152,8 +3164,12 @@ function renderEncomendasGrid() {
                 const closeDropdown = () => {
                     if (dropdown) { dropdown.remove(); dropdown = null; }
                 };
-                const openDropdown = () => {
+                const openDropdown = async () => {
                     closeDropdown();
+                    // 🔥 v2.52.9: Garantir que a lista está carregada antes de abrir o dropdown
+                    if (!_transportadoresCache || _transportadoresCache.length === 0) {
+                        await loadTransportadores();
+                    }
                     const rect = transpInput.getBoundingClientRect();
                     dropdown = document.createElement('div');
                     dropdown.className = 'transp-dropdown';
@@ -3161,7 +3177,7 @@ function renderEncomendasGrid() {
                         position: fixed;
                         top: ${rect.bottom}px;
                         left: ${rect.left}px;
-                        width: ${Math.max(rect.width, 260)}px;
+                        width: ${Math.max(rect.width, 320)}px;
                         max-height: 300px;
                         overflow-y: auto;
                         background: white;
@@ -3177,18 +3193,40 @@ function renderEncomendasGrid() {
                 const renderDropdown = (filter) => {
                     if (!dropdown) return;
                     const f = filter.toLowerCase().trim();
+                    const typed = transpInput.value.trim();
                     const matches = (_transportadoresCache || []).filter(n => n.toLowerCase().includes(f));
-                    if (matches.length === 0) {
-                        dropdown.innerHTML = `<div style="padding:8px 12px;color:#999;font-style:italic;">Sem resultados. Enter para guardar "${transpInput.value}" como novo.</div>`;
-                        return;
+
+                    let html = '';
+
+                    // Se há texto escrito que não bate 100% com nenhuma opção, mostrar opção "adicionar novo"
+                    const exactMatch = matches.find(n => n.toLowerCase() === f);
+                    if (typed && !exactMatch) {
+                        const escapedTyped = typed.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                        html += `<div class="transp-add-new" data-value="${escapedTyped}" style="padding:8px 12px;cursor:pointer;background:#FFF4E6;border-bottom:2px solid #FF9500;color:#CC6600;font-weight:600;">
+                            ➕ Adicionar novo: "${escapedTyped}"
+                        </div>`;
                     }
-                    dropdown.innerHTML = matches.slice(0, 50).map((n, i) => {
-                        const escaped = n.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                        return `<div class="transp-option" data-value="${n.replace(/"/g, '&quot;')}" style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #F0F0F0;">${escaped}</div>`;
-                    }).join('');
-                    dropdown.querySelectorAll('.transp-option').forEach(el => {
-                        el.onmouseenter = () => el.style.background = '#E8F4FD';
-                        el.onmouseleave = () => el.style.background = '';
+
+                    if (matches.length === 0 && !typed) {
+                        html += `<div style="padding:8px 12px;color:#999;font-style:italic;">Lista vazia. Escreva para adicionar novo.</div>`;
+                    } else {
+                        html += matches.slice(0, 100).map(n => {
+                            const escaped = n.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                            return `<div class="transp-option" data-value="${n.replace(/"/g, '&quot;')}" style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #F0F0F0;">${escaped}</div>`;
+                        }).join('');
+                    }
+
+                    dropdown.innerHTML = html;
+
+                    dropdown.querySelectorAll('.transp-option, .transp-add-new').forEach(el => {
+                        el.onmouseenter = () => {
+                            if (el.classList.contains('transp-add-new')) el.style.background = '#FFE4B5';
+                            else el.style.background = '#E8F4FD';
+                        };
+                        el.onmouseleave = () => {
+                            if (el.classList.contains('transp-add-new')) el.style.background = '#FFF4E6';
+                            else el.style.background = '';
+                        };
                         el.onmousedown = (e) => {
                             e.preventDefault(); // prevent blur
                             transpInput.value = el.getAttribute('data-value');
