@@ -4423,22 +4423,26 @@ function setupPresence() {
     
     const userColor = getUserColor(currentUser.id);
     
-    // Criar canal de presença
-    presenceChannel = db.channel(`presence-mapa-encomendas-${currentMonth}-${currentYear}`, {
+    // 🔥 v2.52.10: Canal GLOBAL (não depende do mês) — assim todos os users
+    // aparecem online independentemente do mês que estão a ver.
+    // O cursor só aparece nas células se estiverem no MESMO mês (filtro abaixo).
+    presenceChannel = db.channel('presence-mapa-encomendas-global', {
         config: {
             presence: {
                 key: currentUser.id
             }
         }
     });
-    
-    // Estado inicial do utilizador
+
+    // Estado inicial do utilizador (inclui mês/ano para filtrar cursor)
     myPresenceState = {
         user_id: currentUser.id,
-        user_name: currentUser.email.split('@')[0], // Nome antes do @
+        user_name: currentUser.email.split('@')[0],
         user_email: currentUser.email,
         color: userColor,
-        active_cell: null, // {rowIndex, fieldKey}
+        active_cell: null,
+        month: currentMonth,  // 🆕 permite filtrar cursor por mês
+        year: currentYear,
         last_seen: new Date().toISOString()
     };
     
@@ -4486,16 +4490,20 @@ function setupPresence() {
 
     // 🆕 v2.52.7: Usar BROADCAST para actualizações de cursor (em tempo real, sem throttling de Presence)
     presenceChannel.on('broadcast', { event: 'cursor' }, (msg) => {
-        const { userId, active_cell, color, user_name } = msg.payload || {};
+        const { userId, active_cell, color, user_name, month, year } = msg.payload || {};
         if (!userId || userId === currentUser?.id) return; // ignorar self
 
-        // Actualizar/criar entrada no onlineUsers
+        // 🔥 v2.52.10: Só mostrar cursor se estiver no MESMO mês/ano
+        const sameMonth = month === currentMonth && year === currentYear;
+
         const existing = onlineUsers.get(userId) || {};
         onlineUsers.set(userId, {
             ...existing,
             user_name: user_name || existing.user_name || 'Utilizador',
             color: color || existing.color || '#ff9500',
-            active_cell
+            month, year,
+            // Se está noutro mês, active_cell fica null (não mostra cursor)
+            active_cell: sameMonth ? active_cell : null
         });
         updateCellIndicators();
     });
@@ -4539,7 +4547,9 @@ async function updateMyActiveCell(rowIndex, fieldKey) {
                 userId: currentUser.id,
                 user_name: myPresenceState.user_name,
                 color: myPresenceState.color,
-                active_cell: currentActiveCell
+                active_cell: currentActiveCell,
+                month: currentMonth,   // 🆕 v2.52.10
+                year: currentYear
             }
         });
         console.log('📍 Cursor enviado:', rowIndex, fieldKey);
@@ -4563,7 +4573,9 @@ async function clearMyActiveCell() {
                 userId: currentUser.id,
                 user_name: myPresenceState.user_name,
                 color: myPresenceState.color,
-                active_cell: null
+                active_cell: null,
+                month: currentMonth,   // 🆕 v2.52.10
+                year: currentYear
             }
         });
     } catch (error) {
@@ -4758,11 +4770,10 @@ function disconnectPresence() {
 // Mudar mês
 async function changeMonth(newMonth) {
     console.log('📅 Mudando para mês:', newMonth);
-    
-    // Desconectar Realtime e Presença do mês anterior
+
+    // 🔥 v2.52.10: Só desconectar Realtime (o canal de presença é GLOBAL, não precisa reconectar)
     disconnectRealtime();
-    disconnectPresence();
-    
+
     currentMonth = newMonth;
     // Sincronizar todos os selectors de mês
     const monthSel = document.getElementById('month-selector');
@@ -4773,11 +4784,32 @@ async function changeMonth(newMonth) {
     if (resumoSel) resumoSel.value = newMonth;
     await loadEncomendasData();
     renderResumoCargas();
-    
-    // Reconectar Realtime e Presença para o novo mês
+
+    // Reconectar Realtime para o novo mês
     setupEncomendasRealtime();
-    setupPresence();
-    
+
+    // 🆕 v2.52.10: Actualizar estado da presença (novo mês) e avisar os peers
+    if (presenceChannel && myPresenceState) {
+        myPresenceState.month = currentMonth;
+        myPresenceState.year = currentYear;
+        try {
+            await presenceChannel.track(myPresenceState);
+            // Broadcast para os peers saberem que mudei de mês (limpa cursor)
+            await presenceChannel.send({
+                type: 'broadcast',
+                event: 'cursor',
+                payload: {
+                    userId: currentUser.id,
+                    user_name: myPresenceState.user_name,
+                    color: myPresenceState.color,
+                    active_cell: null,
+                    month: currentMonth,
+                    year: currentYear
+                }
+            });
+        } catch (e) { console.warn('⚠️ Erro ao actualizar presença:', e); }
+    }
+
     showToast(`✅ Mês alterado: ${newMonth.toUpperCase()}`);
 }
 
