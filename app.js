@@ -4339,29 +4339,24 @@ function setupPresence() {
     // Track presence state (quem está online) — sync inicial / join / leave
     presenceChannel.on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
-        console.log('👥 Presença sincronizada:', Object.keys(state).length, 'users');
+        console.log('👥 Presença sincronizada:', Object.keys(state).length, 'users', state);
 
-        // 🔥 v2.52.7: Mergear com dados existentes (preservar active_cell vindo por broadcast)
-        const seenUserIds = new Set();
+        // Reconstruir onlineUsers do state (preservando active_cell vindo por broadcast)
+        const newMap = new Map();
         Object.entries(state).forEach(([userId, presences]) => {
             if (userId === currentUser.id) return;
-            seenUserIds.add(userId);
             const presence = presences[0];
             if (!presence) return;
-            const existing = onlineUsers.get(userId) || {};
-            onlineUsers.set(userId, {
-                ...existing,
+            const existing = onlineUsers.get(userId);
+            newMap.set(userId, {
                 user_name: presence.user_name,
                 user_email: presence.user_email,
                 color: presence.color,
-                // preservar active_cell vindo por broadcast (não resetar!)
-                active_cell: existing.active_cell !== undefined ? existing.active_cell : presence.active_cell,
+                // preservar active_cell se já existia (do broadcast)
+                active_cell: existing?.active_cell || null,
             });
         });
-        // Remover users que já não estão online
-        [...onlineUsers.keys()].forEach(uid => {
-            if (!seenUserIds.has(uid)) onlineUsers.delete(uid);
-        });
+        onlineUsers = newMap;
 
         console.log('👥 Utilizadores online:', onlineUsers.size);
         updateOnlineUsersList();
