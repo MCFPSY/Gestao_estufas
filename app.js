@@ -37,6 +37,9 @@ let presenceChannel = null;
 let onlineUsers = new Map(); // Map<user_id, {name, email, color, cell}>
 let myPresenceState = null;
 let currentActiveCell = null; // {rowIndex, fieldKey}
+// 🆕 v2.52.11: Heartbeat para manter presença sincronizada mesmo com tabs em background
+let _presenceHeartbeat = null;
+let _presenceSubStatus = null; // 'SUBSCRIBED' | 'CLOSED' | 'CHANNEL_ERROR' | 'TIMED_OUT'
 
 // Cores para utilizadores (rotação automática)
 const USER_COLORS = [
@@ -4510,11 +4513,14 @@ function setupPresence() {
 
     // Subscribe e fazer track do estado
     presenceChannel.subscribe(async (status) => {
+        _presenceSubStatus = status;
+        console.log(`📡 Canal presença: ${status}`);
+
         if (status === 'SUBSCRIBED') {
             console.log('✅ Presença ativa!');
             await presenceChannel.track(myPresenceState);
 
-            // 🆕 v2.52.7: Broadcast inicial do meu estado (caso tenha célula activa)
+            // Broadcast inicial (caso tenha célula activa)
             if (currentActiveCell) {
                 await presenceChannel.send({
                     type: 'broadcast',
@@ -4523,13 +4529,68 @@ function setupPresence() {
                         userId: currentUser.id,
                         user_name: myPresenceState.user_name,
                         color: myPresenceState.color,
-                        active_cell: currentActiveCell
+                        active_cell: currentActiveCell,
+                        month: currentMonth,
+                        year: currentYear
                     }
                 });
             }
             showToast('👥 Sistema de presença ativo', 'success');
         }
+
+        // 🆕 v2.52.11: Auto-reconnect se o canal cair
+        if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn(`⚠️ Canal presença caiu (${status}). A reconectar em 3s...`);
+            setTimeout(() => {
+                if (currentUser && _presenceSubStatus !== 'SUBSCRIBED') {
+                    setupPresence();
+                }
+            }, 3000);
+        }
     });
+
+    // 🆕 v2.52.11: Heartbeat — re-track a cada 15s (mantém sync mesmo com tab em background)
+    if (_presenceHeartbeat) clearInterval(_presenceHeartbeat);
+    _presenceHeartbeat = setInterval(async () => {
+        if (!presenceChannel || _presenceSubStatus !== 'SUBSCRIBED') return;
+        try {
+            myPresenceState.last_seen = new Date().toISOString();
+            myPresenceState.month = currentMonth;
+            myPresenceState.year = currentYear;
+            await presenceChannel.track(myPresenceState);
+            // Também re-broadcast do cursor actual (se houver)
+            if (currentActiveCell) {
+                await presenceChannel.send({
+                    type: 'broadcast',
+                    event: 'cursor',
+                    payload: {
+                        userId: currentUser.id,
+                        user_name: myPresenceState.user_name,
+                        color: myPresenceState.color,
+                        active_cell: currentActiveCell,
+                        month: currentMonth,
+                        year: currentYear
+                    }
+                });
+            }
+            console.log('💓 Presence heartbeat');
+        } catch (e) {
+            console.warn('⚠️ Heartbeat falhou:', e);
+        }
+    }, 15000);
+
+    // 🆕 v2.52.11: Re-sync ao voltar de background (visibility change)
+    if (!window._encPresenceVisListener) {
+        window._encPresenceVisListener = true;
+        document.addEventListener('visibilitychange', async () => {
+            if (document.visibilityState === 'visible' && presenceChannel && _presenceSubStatus === 'SUBSCRIBED') {
+                console.log('👁️ Tab visível — forçar re-sync presence');
+                try {
+                    await presenceChannel.track(myPresenceState);
+                } catch (e) {}
+            }
+        });
+    }
 }
 
 // 🆕 v2.52.7: Usar BROADCAST para cursor (muito mais rápido e sem throttling de Presence)
@@ -4754,12 +4815,17 @@ function createUserBadge(name, color, isMe) {
 
 // Desconectar presença (cleanup)
 function disconnectPresence() {
+    if (_presenceHeartbeat) {
+        clearInterval(_presenceHeartbeat);
+        _presenceHeartbeat = null;
+    }
     if (presenceChannel) {
         console.log('👥 Desconectando presença...');
-        presenceChannel.untrack();
-        db.removeChannel(presenceChannel);
+        try { presenceChannel.untrack(); } catch(e) {}
+        try { db.removeChannel(presenceChannel); } catch(e) {}
         presenceChannel = null;
         onlineUsers.clear();
+        _presenceSubStatus = null;
     }
 }
 
