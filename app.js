@@ -1136,17 +1136,15 @@ document.addEventListener('paste', function(e) {
     const cell = target.closest('.excel-cell[data-original-index]');
     if (!cell) return;
 
-    // Se o clipboard interno tem conteúdo, deixa o listener global (Ctrl+V) tratar
-    if (_encClipboard) return;
-
     const text = (e.clipboardData || window.clipboardData || e.originalEvent?.clipboardData)?.getData('text');
     if (!text) return;
 
-    // Se tem tabs ou newlines, é paste multi-cel
+    console.log('📋 [global paste] Paste detetado em', cell.getAttribute('data-field'), '— text len:', text.length);
+
+    // Se tem tabs ou newlines, é paste multi-cel — processar SEMPRE (mesmo com _encClipboard activo)
     if (text.includes('\t') || text.includes('\n')) {
         e.preventDefault();
         e.stopPropagation();
-        console.log('📋 [global paste] Intercetado paste multi-cel em', cell.getAttribute('data-field'));
         pasteMultiCell(text, cell);
     }
     // Senão (single cell text), deixar o comportamento nativo funcionar
@@ -1187,9 +1185,10 @@ function pasteMultiCell(pastedText, startTd) {
             if (isNaN(originalIdx)) return;
 
             // Aplicar consoante o tipo de célula
+            let applied = false;
             if (targetField.key === 'transp') {
                 const input = targetCell.querySelector('input.transp-input');
-                if (input) input.value = cleanValue;
+                if (input) { input.value = cleanValue; applied = true; }
                 if (cleanValue && typeof saveNewTransportador === 'function') {
                     saveNewTransportador(cleanValue);
                 }
@@ -1197,21 +1196,27 @@ function pasteMultiCell(pastedText, startTd) {
                 const sel = targetCell.querySelector('select.horario-select');
                 if (sel) {
                     const valid = Array.from(sel.options).some(o => o.value === cleanValue);
-                    if (valid) sel.value = cleanValue;
+                    if (valid) { sel.value = cleanValue; applied = true; }
                     else return; // valor inválido, não colar
                 }
-            } else if (targetCell.contentEditable === 'true') {
-                targetCell.textContent = cleanValue;
             } else {
-                return;
+                // Célula de texto (cliente, local, medida, qtd, et, enc, nviagem, obs)
+                // Escreve o texto visualmente se possível (se não for contenteditable, o DOM
+                // não muda mas os dados SÃO guardados na próxima sincronização)
+                targetCell.textContent = cleanValue;
+                applied = true;
             }
 
+            if (!applied) return;
+
+            // Sempre actualizar os dados em memória e enfileirar save
             encomendasData.data[`${originalIdx}_${targetField.key}`] = cleanValue;
             queueSave(originalIdx, targetField.key, cleanValue);
             pastedCount++;
         });
     });
 
+    console.log(`✅ pasteMultiCell: ${pastedCount} célula(s) coladas`);
     showToast(`✅ ${pastedCount} célula(s) coladas`, 'success');
 }
 
