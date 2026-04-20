@@ -1311,9 +1311,11 @@ document.addEventListener('keydown', function(e) {
             // Seleção múltipla: construir matriz por linha
             const byRow = new Map();
             _encSelection.forEach(key => {
-                const lastUnderscore = key.lastIndexOf('_');
-                const idx = parseInt(key.substring(0, lastUnderscore));
-                const field = key.substring(lastUnderscore + 1);
+                // 🔥 v2.52.15: usar PRIMEIRO underscore (idx é numérico); o last
+                // partia chaves como "346_horario_carga" em idx=346_horario/field=carga
+                const firstUnderscore = key.indexOf('_');
+                const idx = parseInt(key.substring(0, firstUnderscore));
+                const field = key.substring(firstUnderscore + 1);
                 if (!byRow.has(idx)) byRow.set(idx, new Set());
                 byRow.get(idx).add(field);
             });
@@ -1379,7 +1381,10 @@ document.addEventListener('keydown', function(e) {
         e.stopPropagation();
 
         // Destino: célula focada como canto superior esquerdo
+        // 🔥 v2.52.15: se o foco está num input/select DENTRO de uma célula,
+        // subir ao TD pai em vez de cair no fallback (primeira célula do grid)
         const targetCell = activeEl?.classList?.contains('excel-cell') ? activeEl :
+                           activeEl?.closest?.('.excel-cell[data-original-index]') ||
                            document.querySelector('.excel-cell[data-original-index]');
         if (!targetCell) return;
 
@@ -1424,8 +1429,20 @@ document.addEventListener('keydown', function(e) {
 
                 const destCell = document.querySelector(`.excel-cell[data-original-index="${destOriginalIdx}"][data-field="${destField}"]`);
                 if (destCell) {
-                    if (destCell.contentEditable === 'true') destCell.textContent = value;
-                    else { const sel = destCell.querySelector('select'); if (sel) sel.value = value; }
+                    if (destCell.contentEditable === 'true') {
+                        destCell.textContent = value;
+                    } else {
+                        // 🔥 v2.52.15: TRANSP usa <input>, HORÁRIO usa <select> — tratar ambos
+                        const sel = destCell.querySelector('select');
+                        const inp = destCell.querySelector('input');
+                        if (sel) {
+                            const valid = Array.from(sel.options).some(o => o.value === value);
+                            if (valid) sel.value = value;
+                            // se não for opção válida, data fica guardado mas select mantém o anterior
+                        } else if (inp) {
+                            inp.value = value;
+                        }
+                    }
                 }
                 pastedCount++;
             });
@@ -1445,8 +1462,15 @@ document.addEventListener('keydown', function(e) {
                     const src = document.querySelector(`.excel-cell[data-original-index="${idx}"][data-field="${field}"]`);
                     if (src) {
                         src.style.opacity = '1';
-                        if (src.contentEditable === 'true') src.textContent = '';
-                        else { const sel = src.querySelector('select'); if (sel) sel.value = ''; }
+                        if (src.contentEditable === 'true') {
+                            src.textContent = '';
+                        } else {
+                            // 🔥 v2.52.15: limpar também inputs (TRANSP) no cut-cleanup
+                            const sel = src.querySelector('select');
+                            const inp = src.querySelector('input');
+                            if (sel) sel.value = '';
+                            else if (inp) inp.value = '';
+                        }
                     }
                 });
             });
@@ -3722,6 +3746,9 @@ function setupCellSelection(table) {
         selectedCells.forEach(c => c.style.removeProperty('box-shadow'));
         selectedCells.clear();
         statusBar.style.display = 'none';
+        // 🔥 v2.52.15: sincronizar — limpar também _encSelection para que o Ctrl+C
+        // não copie a linha inteira por defeito quando o drag é desfeito
+        if (typeof _encSelection !== 'undefined') _encSelection.clear();
     }
 
     function applySelection(cells) {
@@ -3729,6 +3756,13 @@ function setupCellSelection(table) {
         cells.forEach(c => {
             c.style.boxShadow = 'inset 0 0 0 2px #007AFF';
             selectedCells.add(c);
+            // 🔥 v2.52.15: popular _encSelection para que o Ctrl+C copie
+            // exactamente as células arrastadas (não a linha toda incluindo SEM)
+            if (typeof _encSelection !== 'undefined') {
+                const idx = c.getAttribute('data-original-index');
+                const field = c.getAttribute('data-field');
+                if (idx && field) _encSelection.add(`${idx}_${field}`);
+            }
         });
         // Calcular somatório e contagem
         let sum = 0, numCount = 0, total = cells.length;
