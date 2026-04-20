@@ -1127,6 +1127,31 @@ function encNavigate(e, currentTd) {
     return true;
 }
 
+// 🆕 v2.52.13: Listener GLOBAL de paste para o Mapa de Encomendas
+// Funciona em qualquer célula (contenteditable, input, select) dentro do grid
+document.addEventListener('paste', function(e) {
+    // Só actuar se o target está dentro do grid de encomendas
+    const target = e.target;
+    if (!target || !target.closest) return;
+    const cell = target.closest('.excel-cell[data-original-index]');
+    if (!cell) return;
+
+    // Se o clipboard interno tem conteúdo, deixa o listener global (Ctrl+V) tratar
+    if (_encClipboard) return;
+
+    const text = (e.clipboardData || window.clipboardData || e.originalEvent?.clipboardData)?.getData('text');
+    if (!text) return;
+
+    // Se tem tabs ou newlines, é paste multi-cel
+    if (text.includes('\t') || text.includes('\n')) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('📋 [global paste] Intercetado paste multi-cel em', cell.getAttribute('data-field'));
+        pasteMultiCell(text, cell);
+    }
+    // Senão (single cell text), deixar o comportamento nativo funcionar
+}, true); // capture phase — intercetar antes dos handlers do input/cell
+
 // 🆕 v2.52.12: Paste multi-celular (contenteditable + input TRANSP + select HORARIO + OBS)
 function pasteMultiCell(pastedText, startTd) {
     const normalized = pastedText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -2763,14 +2788,42 @@ function addSpacerRow(tbody) {
     spacerRow.style.height = '8px';
     spacerRow.style.background = 'transparent';
     spacerRow.style.border = 'none';
-    
+
     const spacerTd = document.createElement('td');
     spacerTd.colSpan = encomendasData.fields.length + 1;
     spacerTd.style.border = 'none';
     spacerTd.style.background = 'transparent';
     spacerRow.appendChild(spacerTd);
-    
+
     tbody.appendChild(spacerRow);
+}
+
+// 🆕 v2.52.13: Header com dia da semana no início de cada bloco de dia
+function addDayHeader(tbody, dateStr) {
+    // dateStr formato "DD/mmm" (ex: "14/abr")
+    const [day, monthAbbr] = dateStr.split('/');
+    const monthMap = {jan:0,fev:1,mar:2,abr:3,mai:4,jun:5,jul:6,ago:7,set:8,out:9,nov:10,dez:11};
+    const dateObj = new Date(currentYear, monthMap[monthAbbr] || 0, parseInt(day));
+    const dayNames = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
+    const dayName = dayNames[dateObj.getDay()];
+
+    const tr = document.createElement('tr');
+    tr.className = 'excel-day-header';
+    const td = document.createElement('td');
+    td.colSpan = encomendasData.fields.length + 1;
+    td.style.cssText = `
+        background: linear-gradient(135deg, #1a1a2e, #16213e);
+        color: white;
+        font-weight: 700;
+        font-size: 12px;
+        padding: 8px 14px;
+        text-align: left;
+        letter-spacing: 0.5px;
+        border: none;
+    `;
+    td.innerHTML = `📅 ${dayName} — <span style="opacity:0.85;font-weight:600;">${dateStr}</span>`;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
 }
 
 // Função para adicionar subtotal por DIA
@@ -3119,7 +3172,7 @@ function renderEncomendasGrid() {
     
     datesToRender.forEach((date, index) => {
         const weekNum = getWeekNumberFromDateStr(date);
-        
+
         // Se mudou de DIA, adicionar sub-total do dia anterior
         if (currentDate !== null && date !== currentDate) {
             addDaySubtotal(tbody, currentDate, dayRowCount, dayQtdSum);
@@ -3127,7 +3180,7 @@ function renderEncomendasGrid() {
             dayRowCount = 0;
             dayQtdSum = 0;
         }
-        
+
         // Se mudou de semana, adicionar sub-total da semana anterior
         if (currentWeekNum !== null && weekNum !== currentWeekNum) {
             addSpacerRow(tbody);
@@ -3136,7 +3189,12 @@ function renderEncomendasGrid() {
             weekRowCount = 0;
             weekQtdSum = 0;
         }
-        
+
+        // 🆕 v2.52.13: Header com dia da semana no início de cada bloco de dia
+        if (date !== currentDate) {
+            addDayHeader(tbody, date);
+        }
+
         currentWeekNum = weekNum;
         currentDate = date;
         
