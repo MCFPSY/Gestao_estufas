@@ -414,20 +414,32 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = document.getElementById('username').value.trim();
     const password = document.getElementById('password').value;
-    const email = username.toLowerCase() + '@secagens.local';
-    
+
+    // 🆕 v2.52.12: Suportar múltiplos domínios de email (legacy e novos)
+    // Utilizadores antigos: @secagens.local
+    // Utilizadores novos (criados após política de email do Supabase): @psy.pt
+    const emailCandidates = [
+        username.toLowerCase() + '@secagens.local',
+        username.toLowerCase() + '@psy.pt',
+    ];
+
     const btn = document.getElementById('login-btn');
     const btnText = document.getElementById('login-text');
     const btnLoading = document.getElementById('login-loading');
     const errorDiv = document.getElementById('login-error');
-    
+
     btn.disabled = true;
     btnText.classList.add('d-none');
     btnLoading.classList.remove('d-none');
     errorDiv.classList.add('d-none');
-    
+
     try {
-        const { data, error } = await db.auth.signInWithPassword({ email, password });
+        let data = null, error = null;
+        for (const email of emailCandidates) {
+            const result = await db.auth.signInWithPassword({ email, password });
+            if (!result.error) { data = result.data; error = null; break; }
+            error = result.error;
+        }
         if (error) throw error;
         currentUser = data.user;
         
@@ -1064,6 +1076,118 @@ function closeModal() {
 
 function updateModalSidebar(estufaId) {
     document.getElementById('modal-sidebar').style.background = ESTUFA_COLORS[estufaId - 1];
+}
+
+// 🆕 v2.52.12: Navegação com setas (funciona em contenteditable, input e select)
+function encNavigate(e, currentTd) {
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab'].includes(e.key)) return false;
+    // Em selects nativos, setas cima/baixo navegam entre opções — só intercetar Left/Right/Tab/Enter
+    const tag = e.target.tagName;
+    if (tag === 'SELECT' && ['ArrowUp', 'ArrowDown'].includes(e.key)) return false;
+
+    e.preventDefault();
+    const currentRow = parseInt(currentTd.getAttribute('data-row-index'));
+    const currentField = currentTd.getAttribute('data-field');
+    const currentFieldIndex = encomendasData.fields.findIndex(f => f.key === currentField);
+
+    let nextRow = currentRow;
+    let nextFieldIndex = currentFieldIndex;
+
+    const datesLen = (typeof datesToRender !== 'undefined' ? datesToRender.length : encomendasData.dates.length);
+
+    if (e.key === 'ArrowUp') {
+        nextRow = Math.max(0, currentRow - 1);
+    } else if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        nextRow = Math.min(datesLen - 1, currentRow + 1);
+    } else if (e.key === 'ArrowLeft') {
+        nextFieldIndex = Math.max(0, currentFieldIndex - 1);
+    } else if (e.key === 'ArrowRight' || e.key === 'Tab') {
+        nextFieldIndex = Math.min(encomendasData.fields.length - 1, currentFieldIndex + 1);
+    }
+
+    const nextField = encomendasData.fields[nextFieldIndex];
+    const nextCell = document.querySelector(
+        `.excel-cell[data-row-index="${nextRow}"][data-field="${nextField.key}"]`
+    );
+    if (!nextCell) return true;
+
+    // Focar na célula seguinte — dependendo do tipo
+    const nextInput = nextCell.querySelector('input, select');
+    if (nextInput) {
+        nextInput.focus();
+        if (nextInput.tagName === 'INPUT' && nextInput.select) nextInput.select();
+    } else if (nextCell.contentEditable === 'true') {
+        nextCell.focus();
+        const range = document.createRange();
+        range.selectNodeContents(nextCell);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+    return true;
+}
+
+// 🆕 v2.52.12: Paste multi-celular (contenteditable + input TRANSP + select HORARIO + OBS)
+function pasteMultiCell(pastedText, startTd) {
+    const normalized = pastedText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const rows = normalized.split('\n');
+    while (rows.length > 0 && rows[rows.length - 1] === '') rows.pop();
+    if (rows.length === 0) return;
+
+    const startRow = parseInt(startTd.getAttribute('data-row-index'));
+    const startField = startTd.getAttribute('data-field');
+    const startFieldIndex = encomendasData.fields.findIndex(f => f.key === startField);
+    if (isNaN(startRow) || startFieldIndex === -1) return;
+
+    console.log(`📋 Colando ${rows.length} linha(s) x ${rows[0].split('\t').length} col(s)`);
+    let pastedCount = 0;
+
+    rows.forEach((rowText, rowOffset) => {
+        const cells = rowText.split('\t');
+        cells.forEach((cellValue, colOffset) => {
+            const targetRow = startRow + rowOffset;
+            const targetFieldIndex = startFieldIndex + colOffset;
+            if (targetFieldIndex >= encomendasData.fields.length) return;
+
+            const targetField = encomendasData.fields[targetFieldIndex];
+            if (targetField.key === 'sem') return; // semana é calculada automaticamente
+
+            const targetCell = document.querySelector(
+                `.excel-cell[data-row-index="${targetRow}"][data-field="${targetField.key}"]`
+            );
+            if (!targetCell) return;
+
+            const cleanValue = cellValue.trim();
+            const originalIdx = parseInt(targetCell.getAttribute('data-original-index'));
+            if (isNaN(originalIdx)) return;
+
+            // Aplicar consoante o tipo de célula
+            if (targetField.key === 'transp') {
+                const input = targetCell.querySelector('input.transp-input');
+                if (input) input.value = cleanValue;
+                if (cleanValue && typeof saveNewTransportador === 'function') {
+                    saveNewTransportador(cleanValue);
+                }
+            } else if (targetField.key === 'horario_carga') {
+                const sel = targetCell.querySelector('select.horario-select');
+                if (sel) {
+                    const valid = Array.from(sel.options).some(o => o.value === cleanValue);
+                    if (valid) sel.value = cleanValue;
+                    else return; // valor inválido, não colar
+                }
+            } else if (targetCell.contentEditable === 'true') {
+                targetCell.textContent = cleanValue;
+            } else {
+                return;
+            }
+
+            encomendasData.data[`${originalIdx}_${targetField.key}`] = cleanValue;
+            queueSave(originalIdx, targetField.key, cleanValue);
+            pastedCount++;
+        });
+    });
+
+    showToast(`✅ ${pastedCount} célula(s) coladas`, 'success');
 }
 
 // ✅ SISTEMA DE MATRIZ DE CARGA COM SELEÇÃO MÚLTIPLA E MERGE VISUAL
@@ -3141,7 +3265,19 @@ function renderEncomendasGrid() {
                         queueSave(originalIdx, field.key, newValue);
                     }
                 });
-                
+
+                // 🆕 v2.52.12: Navegação + foco no select HORARIO
+                select.addEventListener('keydown', (e) => encNavigate(e, td));
+                select.addEventListener('focus', () => {
+                    td.style.outline = '2px solid #007AFF';
+                    td.style.outlineOffset = '-2px';
+                    updateMyActiveCell(originalIndex, field.key);
+                });
+                select.addEventListener('blur', () => {
+                    td.style.outline = 'none';
+                    clearMyActiveCell();
+                });
+
                 td.appendChild(select);
             }
             // 🆕 v2.52.6 + v2.52.8: Campo TRANSP como combobox custom (abre ao focus, filtra ao escrever)
@@ -3275,12 +3411,29 @@ function renderEncomendasGrid() {
                     clearMyActiveCell();
                 });
                 transpInput.addEventListener('keydown', (e) => {
+                    // Primeiro tentar navegação (Tab, setas esq/dir)
+                    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.key)) {
+                        closeDropdown();
+                        if (encNavigate(e, td)) return;
+                    }
                     if (e.key === 'Enter') {
                         e.preventDefault();
                         transpInput.blur();
                     } else if (e.key === 'Escape') {
                         closeDropdown();
                         transpInput.blur();
+                    }
+                });
+
+                // 🆕 v2.52.12: Suportar paste multi-célula começando num input TRANSP
+                transpInput.addEventListener('paste', (e) => {
+                    const text = (e.clipboardData || window.clipboardData).getData('text');
+                    // Se é multi-celula, intercetar e chamar o handler de paste multi-celular
+                    if (text.includes('\t') || text.includes('\n')) {
+                        e.preventDefault();
+                        closeDropdown();
+                        transpInput.blur();
+                        pasteMultiCell(text, td);
                     }
                 });
 
@@ -3337,98 +3490,15 @@ function renderEncomendasGrid() {
                 clearMyActiveCell();
             });
             
-            // ⌨️ NAVEGAÇÃO COM SETAS (estilo Excel)
-            td.addEventListener('keydown', (e) => {
-                // Permitir navegação com setas
-                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab'].includes(e.key)) {
-                    e.preventDefault();
-                    
-                    const currentRow = parseInt(td.getAttribute('data-row-index'));
-                    const currentField = td.getAttribute('data-field');
-                    const currentFieldIndex = encomendasData.fields.findIndex(f => f.key === currentField);
-                    
-                    let nextRow = currentRow;
-                    let nextFieldIndex = currentFieldIndex;
-                    
-                    // Determinar próxima célula
-                    if (e.key === 'ArrowUp') {
-                        nextRow = Math.max(0, currentRow - 1);
-                    } else if (e.key === 'ArrowDown' || e.key === 'Enter') {
-                        nextRow = Math.min(datesToRender.length - 1, currentRow + 1);
-                    } else if (e.key === 'ArrowLeft') {
-                        nextFieldIndex = Math.max(0, currentFieldIndex - 1);
-                    } else if (e.key === 'ArrowRight' || e.key === 'Tab') {
-                        nextFieldIndex = Math.min(encomendasData.fields.length - 1, currentFieldIndex + 1);
-                    }
-                    
-                    // Encontrar e focar na próxima célula
-                    const nextField = encomendasData.fields[nextFieldIndex];
-                    const nextCell = document.querySelector(
-                        `.excel-cell[data-row-index="${nextRow}"][data-field="${nextField.key}"]`
-                    );
-                    
-                    if (nextCell) {
-                        nextCell.focus();
-                        // Selecionar todo o texto (estilo Excel)
-                        const range = document.createRange();
-                        range.selectNodeContents(nextCell);
-                        const sel = window.getSelection();
-                        sel.removeAllRanges();
-                        sel.addRange(range);
-                    }
-                }
-            });
+            // ⌨️ NAVEGAÇÃO COM SETAS (estilo Excel) — extraído para função global
+            td.addEventListener('keydown', (e) => encNavigate(e, td));
             
-            // ===== 🔥 v2.51.36 COPY/PASTE EXCEL =====
+            // ===== 🔥 v2.52.12 COPY/PASTE EXCEL =====
             td.addEventListener('paste', function(e) {
-                // 🔥 v2.52.5: Se o clipboard INTERNO está activo, o listener global já tratou
-                // tudo — evitar duplo-paste que causa conteúdo desactualizado
-                if (_encClipboard) {
-                    e.preventDefault();
-                    return;
-                }
+                if (_encClipboard) { e.preventDefault(); return; }
                 e.preventDefault();
                 const pastedText = (e.clipboardData || window.clipboardData).getData('text');
-
-                // Detectar se é texto multi-célula do Excel (tabs = colunas, \n = linhas)
-                const rows = pastedText.split('\n').filter(r => r.trim());
-                if (rows.length === 0) return;
-                
-                const startRow = parseInt(td.getAttribute('data-row-index'));
-                const startField = td.getAttribute('data-field');
-                const startFieldIndex = encomendasData.fields.findIndex(f => f.key === startField);
-                
-                console.log(`📋 Colando ${rows.length} linha(s) a partir de linha ${startRow}, campo ${startField}`);
-                
-                rows.forEach((rowText, rowOffset) => {
-                    const cells = rowText.split('\t');
-                    cells.forEach((cellValue, colOffset) => {
-                        const targetRow = startRow + rowOffset;
-                        const targetFieldIndex = startFieldIndex + colOffset;
-                        
-                        if (targetFieldIndex >= encomendasData.fields.length) return;
-                        if (targetRow >= datesToRender.length) return;
-                        
-                        const targetField = encomendasData.fields[targetFieldIndex];
-                        const targetCell = document.querySelector(
-                            `.excel-cell[data-row-index="${targetRow}"][data-field="${targetField.key}"]`
-                        );
-                        
-                        if (targetCell && targetCell.contentEditable === 'true') {
-                            targetCell.textContent = cellValue.trim();
-                            
-                            // Salvar no data + trigger autosave
-                            const originalIdx = parseInt(targetCell.getAttribute('data-original-index'));
-                            if (!isNaN(originalIdx)) {
-                                const dataKey = `${originalIdx}_${targetField.key}`;
-                                encomendasData.data[dataKey] = cellValue.trim();
-                                queueSave(originalIdx, targetField.key, cellValue.trim());
-                            }
-                        }
-                    });
-                });
-                
-                showToast('✅ Dados colados com sucesso!', 'success');
+                pasteMultiCell(pastedText, td);
             });
             // ===== FIM COPY/PASTE EXCEL =====
             
