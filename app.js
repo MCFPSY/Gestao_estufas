@@ -3778,9 +3778,9 @@ function setupCellSelection(table) {
         selectedCells.forEach(c => c.style.removeProperty('box-shadow'));
         selectedCells.clear();
         statusBar.style.display = 'none';
-        // 🔥 v2.52.15: sincronizar — limpar também _encSelection para que o Ctrl+C
-        // não copie a linha inteira por defeito quando o drag é desfeito
-        if (typeof _encSelection !== 'undefined') _encSelection.clear();
+        // NOTA v2.52.17: não tocar em _encSelection aqui. Senão o shift+click
+        // (que popula _encSelection no capture phase do document) é imediatamente
+        // limpo quando o table mousedown chama esta função no bubble phase.
     }
 
     function applySelection(cells) {
@@ -3788,13 +3788,6 @@ function setupCellSelection(table) {
         cells.forEach(c => {
             c.style.boxShadow = 'inset 0 0 0 2px #007AFF';
             selectedCells.add(c);
-            // 🔥 v2.52.15: popular _encSelection para que o Ctrl+C copie
-            // exactamente as células arrastadas (não a linha toda incluindo SEM)
-            if (typeof _encSelection !== 'undefined') {
-                const idx = c.getAttribute('data-original-index');
-                const field = c.getAttribute('data-field');
-                if (idx && field) _encSelection.add(`${idx}_${field}`);
-            }
         });
         // Calcular somatório e contagem
         let sum = 0, numCount = 0, total = cells.length;
@@ -3833,6 +3826,18 @@ function setupCellSelection(table) {
     });
 
     document.addEventListener('mouseup', () => {
+        // 🔥 v2.52.17: só sincronizar _encSelection se houve drag REAL (selectedCells
+        // com conteúdo). Shift/Ctrl+click não passam por aqui porque não chamam
+        // applySelection — o _encSelection que eles populam no capture phase
+        // permanece intacto.
+        if (isSelecting && selectedCells.size > 0 && typeof _encSelection !== 'undefined') {
+            _encSelection.clear();
+            selectedCells.forEach(c => {
+                const idx = c.getAttribute('data-original-index');
+                const field = c.getAttribute('data-field');
+                if (idx && field) _encSelection.add(`${idx}_${field}`);
+            });
+        }
         isSelecting = false;
     });
 
