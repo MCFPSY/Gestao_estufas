@@ -1300,12 +1300,24 @@ document.addEventListener('keydown', function(e) {
     const activeEl = document.activeElement;
     const isEncCell = activeEl?.classList?.contains('excel-cell') &&
                       activeEl?.getAttribute('data-original-index');
-    if (!isEncCell && _encSelection.size === 0) return;
 
     const isCtrl = e.ctrlKey || e.metaKey;
+
+    // 🔥 v2.52.18: se o foco está num input/select (TRANSP/HORÁRIO) — fora do
+    // nosso controlo — e há um Ctrl+C/X/V: limpar _encClipboard antes de deixar
+    // passar. Assim o Ctrl+V a seguir não cola dados antigos de um copy interno
+    // que já não é relevante — cai para o handler de paste event (clipboard do
+    // sistema), que é o que o utilizador espera depois de copiar texto num input.
+    if (!isEncCell && _encSelection.size === 0) {
+        if (isCtrl && (e.key === 'c' || e.key === 'C' || e.key === 'x' || e.key === 'X')) {
+            _encClipboard = null;
+        }
+        return;
+    }
+
     if (!isCtrl) return;
 
-    // Helper: obter lista de células a copiar — selecção múltipla OU linha inteira focada
+    // Helper: obter lista de células a copiar — selecção múltipla OU célula focada
     function getCellsToOperate() {
         if (_encSelection.size > 0) {
             // Seleção múltipla: construir matriz por linha
@@ -1337,14 +1349,24 @@ document.addEventListener('keydown', function(e) {
             });
             return { matrix, fields: orderedFields, sourceRows: sortedRows };
         }
-        // Fallback: linha inteira da célula focada
+        // 🔥 v2.52.18: Fallback — SÓ a célula focada (antes copiava a linha toda
+        // incluindo SEM, o que desalinhava colunas no paste). Se precisares de
+        // copiar a linha, usa shift+click de SEM/CLIENTE até OBS.
         const originalIdx = parseInt(activeEl.getAttribute('data-original-index'));
-        const row = encomendasData.fields.map(f => ({
-            field: f.key,
-            value: encomendasData.data[`${originalIdx}_${f.key}`] || '',
-            skip: false
-        }));
-        return { matrix: [row], fields: encomendasData.fields.map(f => f.key), sourceRows: [originalIdx] };
+        const focusedField = activeEl.getAttribute('data-field');
+        if (!focusedField) {
+            // Defensivo: sem data-field, sai sem fazer nada
+            return { matrix: [], fields: [], sourceRows: [] };
+        }
+        return {
+            matrix: [[{
+                field: focusedField,
+                value: encomendasData.data[`${originalIdx}_${focusedField}`] || '',
+                skip: false
+            }]],
+            fields: [focusedField],
+            sourceRows: [originalIdx]
+        };
     }
 
     if (e.key === 'c' || e.key === 'C') {
