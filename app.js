@@ -1081,9 +1081,10 @@ function updateModalSidebar(estufaId) {
 // 🆕 v2.52.12: Navegação com setas (funciona em contenteditable, input e select)
 function encNavigate(e, currentTd) {
     if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab'].includes(e.key)) return false;
-    // Em selects nativos, setas cima/baixo navegam entre opções — só intercetar Left/Right/Tab/Enter
-    const tag = e.target.tagName;
-    if (tag === 'SELECT' && ['ArrowUp', 'ArrowDown'].includes(e.key)) return false;
+    // 🔥 v2.52.19: intercetar também ↑↓ quando foco está num <select> (HORÁRIO).
+    // Antes passavam ao browser e ele alterava silenciosamente a opção enquanto o
+    // utilizador só queria mudar de linha — risco de editar dados por engano.
+    // Para mudar o horário: clicar na seta do select, ou Alt+Down para abrir.
 
     e.preventDefault();
     const currentRow = parseInt(currentTd.getAttribute('data-row-index'));
