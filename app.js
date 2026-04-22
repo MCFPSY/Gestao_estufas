@@ -6151,16 +6151,10 @@ function renderCalendarioSemanal() {
                         event.style.width = `${larguraPorBloco}%`;
                     }
                 } else if (totalCargasNesteSlot > 1) {
-                    // 🔥 v2.51.30: Horários específicos (rowSpan = 1) com múltiplas cargas
-                    // Usar flexbox inline para empilhar horizontalmente
-                    event.style.display = 'inline-block';
-                    event.style.verticalAlign = 'top';
-                    event.style.marginRight = '4px';
-                    
-                    // Calcular largura (distribuir espaço)
-                    const larguraPorBloco = Math.floor((100 / totalCargasNesteSlot) - 1); // -1% para gaps
-                    event.style.width = `${larguraPorBloco}%`;
-                    event.style.minWidth = '120px'; // Largura mínima para legibilidade
+                    // 🔥 v2.52.26: CSS flex do .calendario-day-cell faz wrap
+                    // automaticamente. Antes forçávamos inline-block + width em %
+                    // (override do CSS), o que criava scroll horizontal quando
+                    // havia muitas cargas num slot. Deixar o CSS tratar.
                 } else if (celulaOcupadaPorExpandido) {
                     // Carga específica sobre célula ocupada → z-index maior
                     event.style.position = 'relative';
@@ -8032,12 +8026,7 @@ window.openCargasDetalhe = function(dateKey) {
                     event.style.width = `${larguraPorBloco}%`;
                 }
             } else if (totalCargasNesteSlot > 1) {
-                event.style.display = 'inline-block';
-                event.style.verticalAlign = 'top';
-                event.style.marginRight = '4px';
-                const larguraPorBloco = Math.floor((100 / totalCargasNesteSlot) - 1);
-                event.style.width = `${larguraPorBloco}%`;
-                event.style.minWidth = '120px';
+                // 🔥 v2.52.26: CSS flex-wrap da célula trata do layout. Não forçar aqui.
             } else if (celulaOcupadaPorExpandido) {
                 event.style.position = 'relative';
                 event.style.zIndex = '10';
