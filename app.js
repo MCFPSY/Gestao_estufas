@@ -1040,11 +1040,8 @@ function renderGantt() {
                 
                 block.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    // 🔐 v2.52.0: Verificar permissão
-                    if (!canEdit('planeamento')) {
-                        showToast('⚠️ Não tem permissão para editar secagens', 'warning');
-                        return;
-                    }
+                    // 🔥 v2.52.24: view-only também abre o detalhe — o editSecagem
+                    // trata de aplicar read-only ao modal. NÃO bloquear aqui.
                     console.log('🔵 Clique no bloco:', getSecagemCode(sec));
                     editSecagem(sec);
                 });
@@ -1198,36 +1195,92 @@ function openNewSecagemModal(estufaId, date) {
 }
 
 function editSecagem(sec) {
-    // 🔐 v2.52.0: Verificar permissão ANTES de abrir modal de edição
-    if (!canEdit('planeamento')) {
-        console.warn('❌ [editSecagem] Utilizador não tem permissão para editar secagens');
-        showToast('❌ Não tem permissão para editar secagens', 'error');
-        return;
-    }
-    
-    document.getElementById('modal-title').textContent = `Editar — ${getSecagemCode(sec)}`;
+    // 🔥 v2.52.24: abrir modal sempre — view-only só vê, não edita.
+    const readOnly = !canEdit('planeamento');
+
+    const titlePrefix = readOnly ? 'Ver' : 'Editar';
+    document.getElementById('modal-title').textContent = `${titlePrefix} — ${getSecagemCode(sec)}`;
     document.getElementById('modal-subtitle').textContent = `Estufa ${sec.estufa_id} · ${sec.duration_hours}h`;
     document.getElementById('secagem-id').value = sec.id;
     document.getElementById('input-estufa').value = sec.estufa_id;
     document.getElementById('input-start').value = new Date(sec.start_time).toISOString().slice(0, 16);
     document.getElementById('input-duration').value = sec.duration_hours;
     document.getElementById('input-obs').value = sec.obs || '';
-    
+
     // v2.51.38: Novos campos (com verificação de existência)
     const tipoSecagemField = document.getElementById('input-tipo-secagem');
     if (tipoSecagemField) tipoSecagemField.value = sec.tipo_secagem || 'Dry';
-    
+
     const qtdTotalField = document.getElementById('input-qtd-total');
     if (qtdTotalField) qtdTotalField.value = sec.qtd_total || '';
-    
+
     updateModalSidebar(sec.estufa_id);
     calculateEndTime();
-    
+
     // Carregar dados na matriz
     loadMatrixData(sec.cargo || []);
-    
-    document.getElementById('btn-delete').classList.remove('d-none');
+
+    // Botão eliminar: só visível em modo edição
+    const delBtn = document.getElementById('btn-delete');
+    if (readOnly) delBtn.classList.add('d-none');
+    else delBtn.classList.remove('d-none');
+
+    // Aplicar modo read-only/edit ao modal
+    applyModalSecagemMode(readOnly);
+
     openModal();
+}
+
+// 🔥 v2.52.24: Aplicar modo read-only ou edit ao modal de secagem.
+// Em read-only: inputs bloqueados, botão guardar escondido, só "Fechar" disponível.
+function applyModalSecagemMode(readOnly) {
+    const modal = document.getElementById('modal-secagem');
+    if (!modal) return;
+
+    // Inputs, selects, textareas
+    modal.querySelectorAll('input, select, textarea').forEach(el => {
+        if (readOnly) {
+            el.setAttribute('disabled', 'disabled');
+            el.setAttribute('data-ro', '1');
+        } else if (el.getAttribute('data-ro') === '1') {
+            el.removeAttribute('disabled');
+            el.removeAttribute('data-ro');
+        }
+    });
+
+    // Células editáveis da matriz de cargo
+    modal.querySelectorAll('[contenteditable]').forEach(el => {
+        if (readOnly) {
+            el.setAttribute('data-prev-editable', el.getAttribute('contenteditable') || 'true');
+            el.setAttribute('contenteditable', 'false');
+        } else if (el.hasAttribute('data-prev-editable')) {
+            el.setAttribute('contenteditable', el.getAttribute('data-prev-editable'));
+            el.removeAttribute('data-prev-editable');
+        }
+    });
+
+    // Botão guardar (form submit)
+    const saveBtn = modal.querySelector('.btn-save');
+    if (saveBtn) saveBtn.style.display = readOnly ? 'none' : '';
+
+    // Adicionar aviso visual se read-only
+    let banner = modal.querySelector('#modal-readonly-banner');
+    if (readOnly) {
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'modal-readonly-banner';
+            banner.style.cssText = 'background:#fff4e6;border-left:4px solid #ff9500;color:#663c00;padding:8px 12px;margin:0 0 10px 0;font:500 12px system-ui;border-radius:4px;';
+            banner.textContent = '👁️ Modo visualização — sem permissão para editar.';
+            const body = modal.querySelector('.modal-body') || modal.querySelector('form');
+            if (body) body.insertBefore(banner, body.firstChild);
+        }
+    } else if (banner) {
+        banner.remove();
+    }
+
+    // Texto do botão Cancelar muda para "Fechar" em read-only
+    const cancelBtn = modal.querySelector('.btn-secondary');
+    if (cancelBtn) cancelBtn.textContent = readOnly ? 'Fechar' : 'Cancelar';
 }
 
 function openModal() {
