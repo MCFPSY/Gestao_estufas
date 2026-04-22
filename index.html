@@ -2033,18 +2033,19 @@
         .calendario-day-cell {
             background: white;
             border: 1px solid #E5E5EA;
-            padding: 6px; /* 🔥 v2.52.25: reduzido de 10 para caberem mais blocos por linha */
+            padding: 6px;
             min-height: 100px;
             position: relative;
             vertical-align: top;
             box-sizing: border-box;
-            /* 🔥 v2.52.25: flexbox com wrap — blocos quebram para novas linhas
-               em vez de criar scroll horizontal. Permite ver tudo numa janela. */
-            display: flex;
-            flex-wrap: wrap;
+            /* 🔥 v2.52.27: flex-wrap com !important para forçar layout mesmo
+               se algum inline-style antigo tentar overridear (defesa contra
+               resíduos do cache de service workers antigos). */
+            display: flex !important;
+            flex-wrap: wrap !important;
             align-content: flex-start;
             gap: 4px;
-            overflow: visible; /* blocos expandidos podem ultrapassar célula */
+            overflow: visible;
         }
         
         .calendario-day-cell:hover {
@@ -2066,11 +2067,13 @@
             display: flex;
             flex-direction: column;
             justify-content: flex-start;
-            /* 🔥 v2.52.25: blocos podem shrink para caber mais lado a lado,
-               com min-width razoável para continuarem legíveis */
-            flex: 1 1 140px;
-            min-width: 140px;
-            max-width: 220px;
+            /* 🔥 v2.52.27: blocos com min-width menor (120) para caberem
+               mais lado a lado em colunas estreitas do 3-day view. Com
+               !important para vencer qualquer inline-style velho. */
+            flex: 1 1 120px !important;
+            min-width: 120px !important;
+            max-width: 220px !important;
+            width: auto !important;
             white-space: normal;
             vertical-align: top;
         }
