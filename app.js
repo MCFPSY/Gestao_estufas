@@ -3158,23 +3158,34 @@ function renderEncomendasGrid() {
             encomendasIndexMapping = datesToRender.map((_, i) => i);
         }
 
-        // 🔥 v2.52.16: Ordenação cronológica do display (aplicada APÓS o filtro de semana)
-        // Os dados são guardados por row_order na BD, mas imports/insertions tardios
-        // podem deixar datas fora de sequência (ex: Maio 25 após 26/27/28). O mapa
-        // TEM de aparecer sempre cronologicamente, independente de haver encomendas.
-        // Mexemos só no display — encomendasData.data e row_order ficam intactos.
+        // 🔥 v2.52.16 + v2.52.20: Ordenação cronológica do display (APÓS filtro de semana)
+        // · Base (todos os meses): por (data → row_order). Nunca altera a data.
+        // · Só MAIO/2026: dentro do dia agrupa também por (cliente → local) antes do row_order.
+        //   Motivo: dedup deixou 101 encomendas dispersas que ficam melhor agrupadas.
+        //   Outros meses mantêm comportamento antigo para não desordenar.
+        // Só mexe no display — encomendasData.data e row_order na BD ficam intactos.
         (function sortChronologically() {
             const monthOrder = { jan:0, fev:1, mar:2, abr:3, mai:4, jun:5, jul:6, ago:7, set:8, out:9, nov:10, dez:11 };
-            const pairs = datesToRender.map((date, displayIdx) => ({
-                date: date || '',
-                originalIdx: encomendasIndexMapping[displayIdx]
-            }));
+            const useClientLocalGrouping = (currentMonth === 'mai' && currentYear === 2026);
+            const pairs = datesToRender.map((date, displayIdx) => {
+                const oIdx = encomendasIndexMapping[displayIdx];
+                const p = {
+                    date: date || '',
+                    originalIdx: oIdx
+                };
+                if (useClientLocalGrouping) {
+                    p.cliente = (encomendasData.data[`${oIdx}_cliente`] || '').trim();
+                    p.local = (encomendasData.data[`${oIdx}_local`] || '').trim();
+                }
+                return p;
+            });
             pairs.sort((a, b) => {
-                const aEmpty = !a.date || !a.date.trim();
-                const bEmpty = !b.date || !b.date.trim();
-                if (aEmpty && bEmpty) return (a.originalIdx || 0) - (b.originalIdx || 0);
-                if (aEmpty) return 1;  // datas vazias ficam no fim
-                if (bEmpty) return -1;
+                // 1. Data
+                const aDateEmpty = !a.date || !a.date.trim();
+                const bDateEmpty = !b.date || !b.date.trim();
+                if (aDateEmpty && bDateEmpty) return (a.originalIdx || 0) - (b.originalIdx || 0);
+                if (aDateEmpty) return 1;  // datas vazias ficam no fim
+                if (bDateEmpty) return -1;
                 const [ad, am] = a.date.split('/');
                 const [bd, bm] = b.date.split('/');
                 const amNum = monthOrder[am] ?? 99;
@@ -3183,7 +3194,20 @@ function renderEncomendasGrid() {
                 const adNum = parseInt(ad) || 0;
                 const bdNum = parseInt(bd) || 0;
                 if (adNum !== bdNum) return adNum - bdNum;
-                // Mesmo dia: preservar row_order original como desempate (estável)
+
+                // 2. Só Maio 2026: agrupar por cliente/local dentro do dia
+                if (useClientLocalGrouping) {
+                    // Linhas vazias (sem cliente) vão para o fim, ordenadas por row_order
+                    const aCliEmpty = !a.cliente;
+                    const bCliEmpty = !b.cliente;
+                    if (aCliEmpty && bCliEmpty) return (a.originalIdx || 0) - (b.originalIdx || 0);
+                    if (aCliEmpty) return 1;
+                    if (bCliEmpty) return -1;
+                    if (a.cliente !== b.cliente) return a.cliente.localeCompare(b.cliente, 'pt');
+                    if (a.local !== b.local) return a.local.localeCompare(b.local, 'pt');
+                }
+
+                // 3. Empate final: row_order (estável, preserva ordem de inserção)
                 return (a.originalIdx || 0) - (b.originalIdx || 0);
             });
             datesToRender = pairs.map(p => p.date);
@@ -3196,12 +3220,13 @@ function renderEncomendasGrid() {
             data: Object.keys(dataToRender).length
         });
         
+
         if (!datesToRender || datesToRender.length === 0) {
             console.warn('⚠️ Nenhuma data para renderizar!');
             table.innerHTML = '<tbody><tr><td colspan="10" style="text-align:center;padding:40px;">Nenhum dado disponível para esta semana</td></tr></tbody>';
             return;
         }
-        
+
         table.innerHTML = '';
     
     // HEADER: Campos nas COLUNAS
