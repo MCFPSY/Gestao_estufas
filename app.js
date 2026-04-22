@@ -3896,11 +3896,14 @@ function renderEncomendasGrid() {
             tr.appendChild(td);
         });
         
-        // Contar linha preenchida APENAS se campo LOCAL estiver preenchido
-        const localCellKey = `${index}_local`;
-        const hasLocal = dataToRender[localCellKey] && dataToRender[localCellKey].trim() !== '';
-        
-        if (hasLocal) {
+        // 🔥 v2.52.25: contar como "carga" apenas se campo TRANSP estiver preenchido
+        // (consistente com "Cargas Resumo"). Antes contava por LOCAL, o que incluía
+        // encomendas sem transportador atribuído (ainda não são cargas a sério).
+        // Também usa `originalIndex` (não `index`) para ficar certo após o sort cronológico.
+        const transpCellKey = `${originalIndex}_transp`;
+        const hasTransp = encomendasData.data[transpCellKey] && encomendasData.data[transpCellKey].trim() !== '';
+
+        if (hasTransp) {
             weekRowCount++;
             dayRowCount++;
         }
@@ -8111,26 +8114,27 @@ window.openCargasDetalhe = function(dateKey) {
     modal.style.setProperty('pointer-events', 'auto', 'important');
     
     // 🔥 CRÍTICO: Forçar dimensões no .modal-dialog com cssText
+    // v2.52.25: largura responsiva 95vw (antes 900px fixo) — aproveita ecrã todo
     const dialog = modal.querySelector('.modal-dialog');
     if (dialog) {
         dialog.style.cssText = `
             display: flex !important;
-            width: 900px !important;
-            min-width: 900px !important;
-            max-width: 900px !important;
-            max-height: 90vh !important;
+            width: 95vw !important;
+            min-width: 600px !important;
+            max-width: 1800px !important;
+            max-height: 92vh !important;
             background: white !important;
-            border-radius: 20px !important;
+            border-radius: 16px !important;
             overflow: hidden !important;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3) !important;
             position: relative !important;
         `;
         console.log('   ✅ [OPEN DETALHE] Dialog forçado com cssText');
         console.log('   ✅ [OPEN DETALHE] Dialog offsetWidth:', dialog.offsetWidth, 'offsetHeight:', dialog.offsetHeight);
-        
+
         if (dialog.offsetWidth === 0) {
             console.error('%c🚨 DETALHE DIALOG AINDA É 0!', 'background: red; color: white; font-size: 14px; padding: 5px;');
-            dialog.setAttribute('style', 'display: flex !important; width: 900px !important; background: white !important; border-radius: 20px !important;');
+            dialog.setAttribute('style', 'display: flex !important; width: 95vw !important; background: white !important; border-radius: 16px !important;');
             console.log('   → offsetWidth após setAttribute:', dialog.offsetWidth);
         }
     } else {
