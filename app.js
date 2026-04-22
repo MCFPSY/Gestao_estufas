@@ -4336,7 +4336,29 @@ function updatePendingChangesIndicator() {
 // Salvar todas as linhas (usado em operações que afetam múltiplas linhas)
 // 🔥 BUGFIX v2.52.0: Proteger contra race conditions — capturar mês/ano e dados NO INÍCIO
 // para que mudanças de mês durante a operação async não causem perda de dados
+// 🔥 v2.52.21: Serialização global de saveAllRows.
+// Várias operações (insertRowBelow, deleteRow, addNewDay, recuperar mês) chamam
+// saveAllRows. Se duas corriam em paralelo (ex: dois utilizadores a fazer insert
+// simultâneo, ou um clique duplo), os DELETEs + INSERTs interleavearam e
+// geraram duplicados massivos (caso Maio 2026 — 1679 rows).
+// Esta chain garante execução estrictamente serial: cada chamada espera pela
+// anterior antes de começar.
+let _saveAllRowsChain = Promise.resolve();
+
 async function saveAllRows() {
+    const previous = _saveAllRowsChain;
+    let release;
+    _saveAllRowsChain = new Promise(resolve => { release = resolve; });
+    try {
+        // esperar pela anterior — ignora erro da anterior para não propagar
+        try { await previous; } catch { /* intentionally ignore */ }
+        return await _saveAllRowsImpl();
+    } finally {
+        release();
+    }
+}
+
+async function _saveAllRowsImpl() {
     // 📸 SNAPSHOT: Capturar estado AGORA, antes de qualquer await
     const snapMonth = currentMonth;
     const snapYear = currentYear;
@@ -4390,9 +4412,16 @@ async function saveAllRows() {
             .eq('month', snapMonth)
             .eq('year', snapYear);
 
+        // 🔥 v2.52.21: se o DELETE falhar, ABORTAR. Não fazer INSERT em seguida —
+        // isso antes duplicava tudo quando o DELETE silenciosamente falhava.
+        // A UNIQUE constraint agora também trava qualquer tentativa de duplicar,
+        // mas ser explícito aqui evita pedidos inúteis à BD.
         if (deleteError) {
-            console.error('❌ Erro ao deletar:', deleteError);
-            // NÃO lançar — tentar inserir mesmo assim para não perder dados
+            console.error('❌ Erro ao apagar linhas do mês — a ABORTAR o save para não criar duplicados:', deleteError);
+            if (typeof showToast === 'function') {
+                showToast('❌ Erro ao salvar: DELETE falhou. Tenta novamente.', 'error');
+            }
+            throw deleteError;
         }
 
         // 4. Inserir IMEDIATAMENTE (rows já preparados, sem re-ler currentMonth)
@@ -4407,6 +4436,13 @@ async function saveAllRows() {
 
                 if (insertError) {
                     console.error(`❌ Erro ao inserir lote ${i}-${i + chunk.length}:`, insertError);
+                    // Se for violação de UNIQUE constraint (23505), é sinal de que
+                    // havia saves concorrentes ou estado inconsistente.
+                    if (insertError.code === '23505') {
+                        if (typeof showToast === 'function') {
+                            showToast('⚠️ Conflito de dados detectado — outro save em curso? Recarrega a página.', 'error');
+                        }
+                    }
                     throw insertError;
                 }
             }
