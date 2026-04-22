@@ -122,8 +122,30 @@ async function main() {
         const cliPct = p.rows_with_cliente ? (cliDelta / p.rows_with_cliente) * 100 : 0;
 
         if (Math.abs(rowPct) > 30 || Math.abs(cliPct) > 30) {
-            console.warn(`🚨 ANOMALIA ${s.month}/${s.year}: rows ${p.total_rows}→${s.total_rows} (${rowPct.toFixed(1)}%), cliente ${p.rows_with_cliente}→${s.rows_with_cliente} (${cliPct.toFixed(1)}%) desde ${p.snapshot_at}`);
+            const msg = `Variação anómala em ${s.month}/${s.year} desde ${p.snapshot_at}: rows ${p.total_rows}→${s.total_rows} (${rowPct.toFixed(1)}%), cliente ${p.rows_with_cliente}→${s.rows_with_cliente} (${cliPct.toFixed(1)}%).`;
+            console.warn(`🚨 ANOMALIA — ${msg}`);
             anomalies++;
+
+            // Insert alert row para o banner da app
+            try {
+                await db.from('system_alerts').insert({
+                    severity: 'critical',
+                    title: `Anomalia em ${s.month}/${s.year}`,
+                    message: msg,
+                    source: 'audit_snapshot',
+                    details: {
+                        month: s.month, year: s.year,
+                        previous_snapshot_at: p.snapshot_at,
+                        previous: { total_rows: p.total_rows, rows_with_cliente: p.rows_with_cliente },
+                        current: { total_rows: s.total_rows, rows_with_cliente: s.rows_with_cliente },
+                        row_pct: Number(rowPct.toFixed(2)),
+                        cli_pct: Number(cliPct.toFixed(2))
+                    }
+                });
+                console.log('   → alert gravado em system_alerts');
+            } catch (e) {
+                console.error('   ⚠️ Falhou a gravar alert:', e?.message || e);
+            }
         }
     }
 
