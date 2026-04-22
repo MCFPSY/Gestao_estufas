@@ -314,9 +314,171 @@ async function checkAuthState() {
         setupRealtime();
         updateDateTime();
         setInterval(updateDateTime, 60000);
+
+        // 🔥 v2.52.22: carregar alertas do sistema (banner vermelho se anomalia)
+        loadSystemAlerts();
+        setInterval(loadSystemAlerts, 5 * 60 * 1000); // refresh a cada 5 min
     } else {
         showLogin();
     }
+}
+
+// 🔥 v2.52.22: Banner de alerta do sistema
+// Mostra um header vermelho em cima da app quando o audit detecta
+// anomalias na BD (corrupção, variação brusca de contagens, etc).
+// Só utilizadores autorizados veem (Goncalo + Anabela por agora).
+const ALERT_AUDIENCE = ['goncalo', 'anabela'];
+
+async function loadSystemAlerts() {
+    if (!currentUser) return;
+    const username = (currentUser.email || '').split('@')[0].toLowerCase();
+    if (!ALERT_AUDIENCE.includes(username)) return;
+
+    try {
+        const { data, error } = await db
+            .from('system_alerts')
+            .select('*')
+            .is('acknowledged_at', null)
+            .order('created_at', { ascending: false })
+            .limit(20);
+        if (error) {
+            console.warn('⚠️ [alerts] erro ao ler system_alerts:', error.message);
+            return;
+        }
+        renderSystemAlertBanner(data || []);
+    } catch (e) {
+        console.warn('⚠️ [alerts] excepção:', e?.message || e);
+    }
+}
+
+function renderSystemAlertBanner(alerts) {
+    const existing = document.getElementById('system-alert-banner');
+    if (!alerts || alerts.length === 0) {
+        if (existing) existing.remove();
+        document.body.style.paddingTop = '';
+        return;
+    }
+
+    let banner = existing;
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'system-alert-banner';
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(90deg,#b00,#d00);color:#fff;padding:10px 18px;font:600 13px system-ui;display:flex;align-items:center;gap:14px;box-shadow:0 2px 12px rgba(0,0,0,0.4);border-bottom:2px solid #700;';
+        document.body.appendChild(banner);
+    }
+    banner.innerHTML = '';
+
+    const icon = document.createElement('span');
+    icon.textContent = '🚨';
+    icon.style.fontSize = '18px';
+    banner.appendChild(icon);
+
+    const msg = document.createElement('div');
+    msg.style.flex = '1';
+    msg.innerHTML = `<strong>Anomalia detectada na base de dados</strong> — ${alerts.length} alerta${alerts.length > 1 ? 's' : ''} pendente${alerts.length > 1 ? 's' : ''}. <span style="opacity:0.9;">Validar antes de inserir mais dados.</span>`;
+    banner.appendChild(msg);
+
+    const detailBtn = document.createElement('button');
+    detailBtn.textContent = 'Ver detalhes';
+    detailBtn.style.cssText = 'background:#fff;color:#b00;border:0;padding:7px 14px;cursor:pointer;border-radius:4px;font:600 12px system-ui;';
+    detailBtn.onclick = () => showSystemAlertsModal(alerts);
+    banner.appendChild(detailBtn);
+
+    // body padding para o banner não sobrepor o conteúdo
+    document.body.style.paddingTop = (banner.offsetHeight + 4) + 'px';
+}
+
+function showSystemAlertsModal(alerts) {
+    let modal = document.getElementById('system-alerts-modal');
+    if (modal) modal.remove();
+    modal = document.createElement('div');
+    modal.id = 'system-alerts-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100000;padding:40px;overflow:auto;';
+
+    const content = document.createElement('div');
+    content.style.cssText = 'max-width:800px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;font:13px system-ui;';
+
+    const h = document.createElement('h2');
+    h.textContent = `🚨 ${alerts.length} Alerta${alerts.length > 1 ? 's' : ''} pendente${alerts.length > 1 ? 's' : ''}`;
+    h.style.cssText = 'margin:0 0 16px 0;color:#b00;';
+    content.appendChild(h);
+
+    const warn = document.createElement('p');
+    warn.style.cssText = 'background:#fff4f4;border-left:4px solid #b00;padding:10px 14px;margin:0 0 18px 0;color:#700;';
+    warn.textContent = 'O snapshot diário detectou variações anómalas. Verifica os meses afectados antes de introduzir novos dados.';
+    content.appendChild(warn);
+
+    alerts.forEach(a => {
+        const card = document.createElement('div');
+        card.style.cssText = 'border:1px solid #e0e0e0;border-radius:6px;padding:14px;margin-bottom:12px;';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'font-weight:700;color:#333;margin-bottom:6px;';
+        title.textContent = a.title || '(sem título)';
+        card.appendChild(title);
+
+        const time = document.createElement('div');
+        time.style.cssText = 'font-size:11px;color:#888;margin-bottom:10px;';
+        time.textContent = `Detectado: ${new Date(a.created_at).toLocaleString('pt-PT')} · Origem: ${a.source || '—'}`;
+        card.appendChild(time);
+
+        if (a.message) {
+            const msg = document.createElement('div');
+            msg.style.cssText = 'color:#333;margin-bottom:10px;white-space:pre-wrap;';
+            msg.textContent = a.message;
+            card.appendChild(msg);
+        }
+
+        if (a.details) {
+            const det = document.createElement('pre');
+            det.style.cssText = 'background:#f5f5f5;padding:10px;border-radius:4px;font:11px monospace;margin:0 0 10px 0;overflow:auto;max-height:200px;';
+            det.textContent = JSON.stringify(a.details, null, 2);
+            card.appendChild(det);
+        }
+
+        const ackBtn = document.createElement('button');
+        ackBtn.textContent = '✓ Marcar como validado/resolvido';
+        ackBtn.style.cssText = 'background:#060;color:#fff;border:0;padding:8px 14px;cursor:pointer;border-radius:4px;font:600 12px system-ui;';
+        ackBtn.onclick = async () => {
+            if (!confirm('Confirmas que já validaste este alerta?')) return;
+            ackBtn.textContent = '⏳ a marcar...';
+            ackBtn.disabled = true;
+            try {
+                await acknowledgeSystemAlert(a.id);
+                card.style.opacity = '0.4';
+                ackBtn.textContent = '✓ resolvido';
+                // Recarregar banner (vai esconder se zero alertas)
+                await loadSystemAlerts();
+            } catch (e) {
+                ackBtn.textContent = '❌ erro';
+                alert('Erro ao marcar: ' + (e?.message || e));
+            }
+        };
+        card.appendChild(ackBtn);
+
+        content.appendChild(card);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Fechar';
+    closeBtn.style.cssText = 'background:#666;color:#fff;border:0;padding:8px 16px;cursor:pointer;border-radius:4px;font:13px system-ui;margin-top:8px;';
+    closeBtn.onclick = () => modal.remove();
+    content.appendChild(closeBtn);
+
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+}
+
+async function acknowledgeSystemAlert(alertId) {
+    const { error } = await db
+        .from('system_alerts')
+        .update({
+            acknowledged_at: new Date().toISOString(),
+            acknowledged_by_user_id: currentUser?.id || null,
+            acknowledged_by_email: currentUser?.email || null
+        })
+        .eq('id', alertId);
+    if (error) throw error;
 }
 
 function showLogin() {
@@ -502,6 +664,8 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         applyPermissions();
         loadAllData();
         setupRealtime();
+        // 🔥 v2.52.22: alertas também aqui (fluxo de login manual)
+        loadSystemAlerts();
         showToast('Login realizado com sucesso!');
     } catch (error) {
         console.error('❌ Erro no login:', error);
@@ -4554,7 +4718,19 @@ async function saveEncomendasData() {
 // FASE 2: SUPABASE REALTIME - SINCRONIZAÇÃO TEMPO REAL
 // ===================================================================
 
-// Configurar Realtime para o Mapa de Encomendas
+// 🔥 v2.52.23: Realtime + polling fallback para sync multi-utilizador
+// Problemas corrigidos vs versão anterior:
+//   · Filtro composto (month+year) era inválido no Supabase Realtime — agora
+//     usa filtro simples e verifica year no handler
+//   · updateSingleRow usava indexing posicional do DOM, que deixou de
+//     coincidir com row_order após o sort cronológico (v2.52.16/20) — agora
+//     usa selector por data-original-index
+//   · INSERT/DELETE não actualizavam o grid — agora trigger de soft re-render
+//   · Sem fallback se Realtime caísse — agora polling de 20s verifica
+//     alterações via updated_at
+let _encomendasPollTimer = null;
+let _lastRealtimePollAt = null;
+
 function setupEncomendasRealtime() {
     // Cleanup: desconectar canal anterior se existir
     if (realtimeChannel) {
@@ -4562,124 +4738,229 @@ function setupEncomendasRealtime() {
         db.removeChannel(realtimeChannel);
         realtimeChannel = null;
     }
-    
+
     console.log('📡 Ativando Realtime para:', currentMonth, '/', currentYear);
-    
-    // Criar novo canal
-    realtimeChannel = db.channel(`mapa-encomendas-${currentMonth}-${currentYear}`)
-        .on('postgres_changes', 
-            { 
-                event: '*',  // Todos: INSERT, UPDATE, DELETE
-                schema: 'public', 
+
+    // Snapshot do mês no momento da subscrição (para usar no handler sem
+    // apanhar mudanças de mês a meio)
+    const subscribedMonth = currentMonth;
+    const subscribedYear = currentYear;
+
+    // Criar novo canal — filtro só por month (year é verificado no handler).
+    // Supabase Realtime só aceita UM filtro por subscription.
+    realtimeChannel = db.channel(`mapa-encomendas-${subscribedMonth}-${subscribedYear}`)
+        .on('postgres_changes',
+            {
+                event: '*',
+                schema: 'public',
                 table: 'mapa_encomendas',
-                filter: `month=eq.${currentMonth},year=eq.${currentYear}`
-            }, 
-            handleRealtimeChange
+                filter: `month=eq.${subscribedMonth}`
+            },
+            (payload) => {
+                // Verificar year no cliente (Realtime não suporta filtro composto)
+                const row = payload.new || payload.old;
+                if (row?.year !== subscribedYear) return;
+                handleRealtimeChange(payload);
+            }
         )
         .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
                 isRealtimeActive = true;
-                console.log('✅ Realtime ativo!');
-                showToast('📡 Sincronização em tempo real ativa', 'info');
-            } else if (status === 'CHANNEL_ERROR') {
-                console.error('❌ Erro ao conectar Realtime');
+                console.log('✅ Realtime ativo para', subscribedMonth, '/', subscribedYear);
+            } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                console.error('❌ Realtime error:', status, '— fallback via polling');
                 isRealtimeActive = false;
             } else if (status === 'CLOSED') {
                 isRealtimeActive = false;
                 console.log('🔌 Realtime desconectado');
             }
         });
+
+    // Iniciar polling fallback (independente do Realtime — sempre activo como cinto-e-suspensórios)
+    startEncomendasPolling();
 }
 
-// Handler para alterações recebidas via Realtime
+// Handler para alterações recebidas (via Realtime OU polling)
 function handleRealtimeChange(payload) {
-    console.log('📡 Alteração recebida:', payload.eventType, payload);
-    
-    if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+    const eventType = payload.eventType || 'UPDATE';
+    console.log('📡', eventType, 'row_order:', (payload.new || payload.old)?.row_order);
+
+    if (eventType === 'INSERT' || eventType === 'UPDATE') {
         const row = payload.new;
+        if (!row) return;
         const rowIndex = row.row_order;
 
-        // Ignorar se há alterações locais pendentes para esta linha — o nosso save vai ganhar
+        // Ignorar se há alterações locais pendentes para esta linha
         if (saveQueue.has(rowIndex)) {
             console.log('⚠️ [realtime] Linha', rowIndex, 'tem alterações pendentes — update remoto ignorado');
             return;
         }
 
-        console.log('💾 Atualizando linha', rowIndex, 'localmente');
-        
-        // Atualizar dados locais
-        if (!encomendasData.dates[rowIndex]) {
-            encomendasData.dates[rowIndex] = row.date;
-        } else {
-            encomendasData.dates[rowIndex] = row.date;
-        }
-        
-        // Atualizar células
+        // Actualizar estado em memória
+        const wasKnown = typeof encomendasData.dates[rowIndex] === 'string' && encomendasData.dates[rowIndex].length > 0;
+        encomendasData.dates[rowIndex] = row.date || '';
         encomendasData.fields.forEach(field => {
             const cellKey = `${rowIndex}_${field.key}`;
             if (row[field.key] !== undefined) {
                 encomendasData.data[cellKey] = row[field.key];
             }
         });
-        
-        // Atualizar visualmente apenas essa linha
-        updateSingleRow(rowIndex);
-        
-        // Toast discreto (não mostrar se for a própria alteração)
+
+        if (!wasKnown && eventType === 'INSERT') {
+            // Linha nova — fazer soft re-render (a célula ainda não existe no DOM)
+            console.log('🆕 Linha nova — soft re-render');
+            scheduleSoftRerender();
+        } else {
+            // Linha existente — só actualizar as células afectadas
+            updateSingleRow(rowIndex);
+        }
+
+        // Não mostrar toast se a alteração é minha (isSaving indica que o save local está em curso)
         if (!isSaving) {
-            showToast(`📡 Linha ${rowIndex + 1} atualizada por outro utilizador`, 'info');
+            showToast(`📡 Actualização de outro utilizador`, 'info');
         }
     }
-    
-    if (payload.eventType === 'DELETE') {
-        console.log('📡 Linha apagada por outro utilizador');
-        showToast('📡 Dados alterados. A recarregar...', 'warning');
-        
-        // Recarregar todos os dados
-        setTimeout(() => {
-            loadEncomendasData();
-        }, 500);
+
+    if (eventType === 'DELETE') {
+        console.log('📡 Linha apagada — soft re-render');
+        const row = payload.old;
+        if (row) {
+            const rowIndex = row.row_order;
+            encomendasData.dates[rowIndex] = '';
+            encomendasData.fields.forEach(field => {
+                delete encomendasData.data[`${rowIndex}_${field.key}`];
+            });
+        }
+        scheduleSoftRerender();
     }
 }
 
-// Atualizar visualmente apenas UMA linha (performance otimizada)
+// Re-render "suave": agrupa múltiplos eventos num único render, e evita
+// re-render enquanto o utilizador está a editar (não perder input).
+let _softRerenderTimer = null;
+function scheduleSoftRerender() {
+    if (_softRerenderTimer) return;  // já agendado
+    _softRerenderTimer = setTimeout(() => {
+        _softRerenderTimer = null;
+        const activeEl = document.activeElement;
+        const editing = activeEl && (
+            activeEl.classList?.contains('excel-cell') ||
+            activeEl.classList?.contains('transp-input') ||
+            activeEl.classList?.contains('horario-select') ||
+            activeEl.closest?.('.excel-cell')
+        );
+        if (editing) {
+            // Adiar re-render — tentar outra vez daqui a 5s
+            console.log('⏸️ Re-render adiado (utilizador está a editar)');
+            setTimeout(scheduleSoftRerender, 5000);
+            return;
+        }
+        try { renderEncomendasGrid(); } catch (e) { console.error('Erro no soft re-render:', e); }
+    }, 300);  // debounce 300ms para agrupar eventos
+}
+
+// 🔥 v2.52.23: Polling fallback — corre de 20 em 20 segundos, busca linhas
+// com updated_at mais recente que a última ronda e aplica como updates.
+// Garante latência máxima de ~20s mesmo que o Realtime falhe por qualquer motivo.
+function startEncomendasPolling() {
+    stopEncomendasPolling();
+    _lastRealtimePollAt = new Date().toISOString();
+    _encomendasPollTimer = setInterval(pollEncomendasUpdates, 20_000);
+    console.log('🔄 Polling fallback activo (20s)');
+}
+
+function stopEncomendasPolling() {
+    if (_encomendasPollTimer) {
+        clearInterval(_encomendasPollTimer);
+        _encomendasPollTimer = null;
+    }
+}
+
+async function pollEncomendasUpdates() {
+    // Não fazer poll se não estamos na tab encomendas ou se há saves em curso
+    if (isSaving) return;
+    if (!currentMonth || !currentYear) return;
+
+    const pollStart = new Date().toISOString();
+    try {
+        const { data, error } = await db
+            .from('mapa_encomendas')
+            .select('*')
+            .eq('month', currentMonth)
+            .eq('year', currentYear)
+            .gt('updated_at', _lastRealtimePollAt);
+        if (error) {
+            console.warn('⚠️ poll error:', error.message);
+            return;
+        }
+        if (data && data.length > 0) {
+            console.log(`🔄 Polling encontrou ${data.length} alteração(ões) desde ${_lastRealtimePollAt}`);
+            data.forEach(row => {
+                handleRealtimeChange({ eventType: 'UPDATE', new: row });
+            });
+        }
+        _lastRealtimePollAt = pollStart;
+    } catch (e) {
+        console.warn('⚠️ poll exception:', e?.message || e);
+    }
+}
+
+// Atualizar visualmente UMA linha por data-original-index (não por posição DOM)
+// 🔥 v2.52.23: usar selector por atributo em vez de nth-child. O sort cronológico
+// faz com que DOM order != row_order — indexing posicional apanhava a linha errada.
 function updateSingleRow(rowIndex) {
     const table = document.getElementById('encomendas-grid');
     if (!table) return;
-    
-    const rows = table.querySelectorAll('tbody tr.excel-row');
-    const row = rows[rowIndex];
-    
-    if (!row) {
-        console.warn('⚠️ Linha', rowIndex, 'não encontrada no DOM');
-        return;
-    }
-    
-    // Atualizar cada célula da linha
-    const cells = row.querySelectorAll('.excel-cell');
-    
-    cells.forEach((cell, fieldIndex) => {
-        const field = encomendasData.fields[fieldIndex];
+
+    encomendasData.fields.forEach(field => {
+        const cell = table.querySelector(
+            `.excel-cell[data-original-index="${rowIndex}"][data-field="${field.key}"]`
+        );
+        if (!cell) return;
+
         const cellKey = `${rowIndex}_${field.key}`;
         const newValue = encomendasData.data[cellKey] || '';
-        
-        // Só atualizar se:
-        // 1. Valor mudou
-        // 2. Utilizador NÃO está a editar essa célula neste momento
-        if (cell.textContent !== newValue && document.activeElement !== cell) {
+
+        // Não sobrescrever célula que o utilizador está a editar
+        const activeEl = document.activeElement;
+        const userIsEditingThisCell =
+            activeEl === cell ||
+            (activeEl && cell.contains(activeEl));
+        if (userIsEditingThisCell) return;
+
+        // TRANSP — input
+        const input = cell.querySelector('input.transp-input');
+        if (input) {
+            if (input.value !== newValue) {
+                input.value = newValue;
+                flashCell(cell, field.color);
+            }
+            return;
+        }
+
+        // HORÁRIO — select
+        const sel = cell.querySelector('select.horario-select');
+        if (sel) {
+            const valid = Array.from(sel.options).some(o => o.value === newValue);
+            if (valid && sel.value !== newValue) {
+                sel.value = newValue;
+                flashCell(cell, field.color);
+            }
+            return;
+        }
+
+        // Contenteditable
+        if (cell.textContent !== newValue) {
             cell.textContent = newValue;
-            
-            // Feedback visual: célula pisca verde
-            const originalBackground = cell.style.background || field.color;
-            
-            cell.style.transition = 'background 0.5s ease';
-            cell.style.background = '#90EE90';  // Verde claro
-            
-            setTimeout(() => {
-                cell.style.background = originalBackground;
-            }, 500);
+            flashCell(cell, field.color);
         }
     });
+}
+
+function flashCell(cell, originalColor) {
+    cell.style.transition = 'background 0.5s ease';
+    cell.style.background = '#90EE90';
+    setTimeout(() => { cell.style.background = originalColor || ''; }, 500);
 }
 
 // Desconectar Realtime (cleanup)
@@ -4690,6 +4971,8 @@ function disconnectRealtime() {
         realtimeChannel = null;
         isRealtimeActive = false;
     }
+    // 🔥 v2.52.23: parar polling também (é recriado em setupEncomendasRealtime)
+    stopEncomendasPolling();
 }
 
 // ===================================================================
