@@ -1,0 +1,29 @@
+name: Daily Audit Snapshot (mapa_encomendas)
+
+on:
+  schedule:
+    # 02:30 UTC = 03:30 Lisboa (WEST) — hora de pouco tráfego
+    - cron: '30 2 * * *'
+  workflow_dispatch: # botão manual
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd scripts
+          npm init -y
+          npm install @supabase/supabase-js
+
+      - name: Run audit snapshot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: node scripts/audit-snapshot.mjs
