@@ -6222,13 +6222,31 @@ function renderCalendarioSemanal() {
     
     console.log(`\n🎨 RESULTADO FINAL:`);
     console.log(`   ✅ Total de blocos renderizados no calendário: ${totalBlocosRenderizados}`);
-    
+
     if (totalBlocosRenderizados === 0 && cargas.length > 0) {
         console.error(`\n   ❌ ERRO: ${cargas.length} carga(s) encontrada(s), mas NENHUM bloco foi renderizado!`);
         console.error(`   Isto significa que as datas não estão a fazer match com os dias da semana.`);
     }
-    
+
     console.log('='.repeat(60) + '\n');
+
+    // 🔥 v2.52.28-debug: Badge visível em cada célula com >1 carga com diagnóstico
+    // de layout (count de events no DOM + largura/altura reais). Permite ver sem
+    // abrir F12. Remover em v2.52.29 após resolver.
+    setTimeout(() => {
+        document.querySelectorAll('.calendario-day-cell').forEach(cell => {
+            const events = cell.querySelectorAll('.calendario-event');
+            if (events.length > 1) {
+                const r = cell.getBoundingClientRect();
+                const first = events[0].getBoundingClientRect();
+                const last = events[events.length - 1].getBoundingClientRect();
+                const badge = document.createElement('div');
+                badge.textContent = `n=${events.length} cell:${Math.round(r.width)}×${Math.round(r.height)} ev1:${Math.round(first.width)} evN:${Math.round(last.width)}`;
+                badge.style.cssText = 'position:absolute;top:2px;left:2px;background:#FFD60A;color:#000;font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;z-index:20;pointer-events:none;font-family:monospace;';
+                cell.appendChild(badge);
+            }
+        });
+    }, 100);
 }
 
 function getWeekDates(weekNumber) {

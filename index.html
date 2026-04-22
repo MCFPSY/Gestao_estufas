@@ -1996,8 +1996,8 @@
         
         .calendario-grid {
             display: grid;
-            grid-template-columns: 140px repeat(3, 1fr); /* 🔥 v2.51.20: 1fr para ocupar espaço total disponível */
-            grid-auto-rows: minmax(100px, auto); /* 🔥 Altura mínima aumentada de 80px para 100px */
+            grid-template-columns: 140px repeat(3, minmax(0, 1fr)); /* 🔥 v2.52.28: minmax(0,1fr) para coluna poder encolher e deixar flex-wrap disparar */
+            grid-auto-rows: auto; /* 🔥 v2.52.28: altura livre para conter wrap de múltiplos blocks (antes minmax(100px, auto) limitava intrinsic height) */
             width: 100%; /* 🔥 Largura total do container */
             height: 100%; /* 🔥 Altura total */
             background: white;
@@ -2034,7 +2034,10 @@
             background: white;
             border: 1px solid #E5E5EA;
             padding: 6px;
-            min-height: 100px;
+            /* 🔥 v2.52.28: remover min-height: 100px — estava a limitar intrinsic
+               height do grid item e a impedir o grid-auto-rows de crescer para
+               acomodar múltiplas linhas de flex-wrap. */
+            min-width: 0; /* 🔥 v2.52.28: permitir que o grid item encolha */
             position: relative;
             vertical-align: top;
             box-sizing: border-box;
