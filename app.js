@@ -4571,15 +4571,33 @@ function updatePendingChangesIndicator() {
 // anterior antes de começar.
 let _saveAllRowsChain = Promise.resolve();
 
+// 🔥 v2.52.31: Suprimir eco de Realtime/polling durante (e logo após) saveAllRows.
+// saveAllRows faz DELETE + INSERT massivos do mês inteiro — cada row afectada
+// dispara um event que volta ao próprio browser. Sem estes flags, o handler
+// mostrava dezenas de toasts "Actualização de outro utilizador" e podia fazer
+// rerenders destrutivos enquanto o estado local ainda estava em trânsito.
+// Grace de 2s cobre events em atraso. Presence garante que não há outro user
+// a editar nessa janela (a UI mostra quem está onde).
+let isSavingAll = false;
+let _savingAllGraceUntil = 0;
+const SAVING_ALL_GRACE_MS = 2000;
+
+function isEchoFromOwnSave() {
+    return isSaving || isSavingAll || Date.now() < _savingAllGraceUntil;
+}
+
 async function saveAllRows() {
     const previous = _saveAllRowsChain;
     let release;
     _saveAllRowsChain = new Promise(resolve => { release = resolve; });
+    isSavingAll = true;
     try {
         // esperar pela anterior — ignora erro da anterior para não propagar
         try { await previous; } catch { /* intentionally ignore */ }
         return await _saveAllRowsImpl();
     } finally {
+        isSavingAll = false;
+        _savingAllGraceUntil = Date.now() + SAVING_ALL_GRACE_MS;
         release();
     }
 }
@@ -4847,6 +4865,14 @@ function handleRealtimeChange(payload) {
     const eventType = payload.eventType || 'UPDATE';
     console.log('📡', eventType, 'row_order:', (payload.new || payload.old)?.row_order);
 
+    // 🔥 v2.52.31: ignorar eco do próprio saveAllRows — o DELETE+INSERT massivo
+    // gera dezenas de events que voltam ao próprio browser; processá-los causava
+    // spam de toasts e rerenders destrutivos sobre estado local já correto.
+    if (isEchoFromOwnSave()) {
+        console.log('⏸️ [realtime] eco do próprio save — ignorado');
+        return;
+    }
+
     if (eventType === 'INSERT' || eventType === 'UPDATE') {
         const row = payload.new;
         if (!row) return;
@@ -4954,8 +4980,10 @@ function stopEncomendasPolling() {
 }
 
 async function pollEncomendasUpdates() {
-    // Não fazer poll se não estamos na tab encomendas ou se há saves em curso
-    if (isSaving) return;
+    // Não fazer poll se há saves em curso ou eco ainda em trânsito.
+    // 🔥 v2.52.31: cobrir também saveAllRows (antes era só isSaving, que só
+    // protegia edits individuais via processSaveQueue).
+    if (isEchoFromOwnSave()) return;
     if (!currentMonth || !currentYear) return;
 
     const pollStart = new Date().toISOString();
