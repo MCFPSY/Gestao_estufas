@@ -4117,6 +4117,12 @@ function setupCellSelection(table) {
 
 // Carregar dados do mês da BD
 async function loadEncomendasData() {
+    // 🔥 v2.52.33: antes de qualquer load, verificar se ficou um snapshot órfão
+    // de um saveAllRows anterior que não completou (rede caiu, browser fechou).
+    // Só corre uma vez por sessão — flag interna. Se o user restaurar, currentMonth
+    // passa a ser o do snapshot e o restante load aplica-se a esse mês.
+    await checkOrphanRecoverySnapshot();
+
     // Garantir que as alterações pendentes são salvas ANTES de recarregar,
     // para não perder edições locais de nenhum utilizador
     if (saveQueue && saveQueue.size > 0) {
@@ -4571,6 +4577,88 @@ function updatePendingChangesIndicator() {
 // anterior antes de começar.
 let _saveAllRowsChain = Promise.resolve();
 
+// 🔥 v2.52.33: Snapshot de recuperação em localStorage antes de cada saveAllRows.
+// Objectivo: garantir que nenhuma operação que passe por saveAllRows (inserir
+// linha, apagar linha, importar PDF, renumerar, etc.) pode perder dados se a
+// rede cair, o browser crashar, ou o PC desligar a meio. O snapshot fica até
+// o save terminar com sucesso; se falhar ou a app for reiniciada sem completar,
+// o snapshot órfão é detectado no arranque e oferece restauro ao utilizador.
+const RECOVERY_KEY = 'mapa_encomendas_recovery_pending';
+let _orphanRecoveryChecked = false;
+
+function writeRecoverySnapshot(operation) {
+    try {
+        const snapshot = {
+            version: '2.52.33',
+            month: currentMonth,
+            year: currentYear,
+            dates: [...(encomendasData?.dates || [])],
+            data: { ...(encomendasData?.data || {}) },
+            timestamp: Date.now(),
+            operation: operation || 'saveAllRows'
+        };
+        localStorage.setItem(RECOVERY_KEY, JSON.stringify(snapshot));
+    } catch (e) {
+        // QuotaExceededError ou similar — logamos mas não bloqueamos o save.
+        console.warn('⚠️ [recovery] falha ao escrever snapshot:', e?.message || e);
+    }
+}
+
+function clearRecoverySnapshot() {
+    try { localStorage.removeItem(RECOVERY_KEY); } catch { /* ignore */ }
+}
+
+function readRecoverySnapshot() {
+    try {
+        const raw = localStorage.getItem(RECOVERY_KEY);
+        if (!raw) return null;
+        const snap = JSON.parse(raw);
+        if (!snap || typeof snap !== 'object' || !Array.isArray(snap.dates)) return null;
+        return snap;
+    } catch { return null; }
+}
+
+async function checkOrphanRecoverySnapshot() {
+    if (_orphanRecoveryChecked) return;
+    _orphanRecoveryChecked = true;
+    const snap = readRecoverySnapshot();
+    if (!snap) return;
+
+    const ageMs = Date.now() - (snap.timestamp || 0);
+    const ageMin = Math.round(ageMs / 60000);
+    const ageLabel = ageMin < 1 ? 'há segundos' : ageMin < 60 ? `há ${ageMin} min` : `há ${Math.round(ageMin/60)}h`;
+    const validRows = (snap.dates || []).filter(d => d && String(d).trim()).length;
+
+    const msg = `⚠️ Operação incompleta detectada no Mapa Encomendas.
+
+Mês: ${snap.month}/${snap.year}
+Operação: ${snap.operation}
+Quando: ${ageLabel}
+Linhas válidas: ${validRows}
+
+Queres restaurar estes dados agora? (escreve na BD)
+
+OK  = restaurar
+Cancelar = descartar snapshot (perdido para sempre)`;
+
+    if (confirm(msg)) {
+        try {
+            currentMonth = snap.month;
+            currentYear = snap.year;
+            encomendasData.dates = snap.dates;
+            encomendasData.data = snap.data || {};
+            await saveAllRows('restore-from-recovery');
+            if (typeof showToast === 'function') showToast('✅ Dados restaurados com sucesso', 'success');
+        } catch (e) {
+            console.error('❌ [recovery] falha ao restaurar:', e);
+            if (typeof showToast === 'function') showToast('❌ Erro ao restaurar: ' + (e?.message || e), 'error');
+            // NÃO limpar snapshot — user pode tentar de novo
+            return;
+        }
+    }
+    clearRecoverySnapshot();
+}
+
 // 🔥 v2.52.31: Suprimir eco de Realtime/polling durante (e logo após) saveAllRows.
 // saveAllRows faz DELETE + INSERT massivos do mês inteiro — cada row afectada
 // dispara um event que volta ao próprio browser. Sem estes flags, o handler
@@ -4603,15 +4691,31 @@ function isEchoFromOwnSave() {
     return false;
 }
 
-async function saveAllRows() {
+async function saveAllRows(opName) {
     const previous = _saveAllRowsChain;
     let release;
     _saveAllRowsChain = new Promise(resolve => { release = resolve; });
     isSavingAll = true;
+
+    // 🔥 v2.52.33: snapshot de recuperação ANTES de tocar na BD.
+    // Fica no localStorage até o save completar com sucesso. Se a rede cair,
+    // o browser crashar, ou o PC desligar a meio, o próximo arranque detecta
+    // o snapshot órfão e oferece restauro.
+    writeRecoverySnapshot(opName || 'saveAllRows');
+
     try {
         // esperar pela anterior — ignora erro da anterior para não propagar
         try { await previous; } catch { /* intentionally ignore */ }
-        return await _saveAllRowsImpl();
+        const result = await _saveAllRowsImpl();
+        // Sucesso → limpar snapshot (já não é necessário)
+        clearRecoverySnapshot();
+        return result;
+    } catch (err) {
+        // 🔥 v2.52.33: snapshot mantido para recuperação. Avisar user.
+        if (typeof showToast === 'function') {
+            showToast('❌ Erro ao salvar. Dados preservados localmente — tenta de novo ou recarrega a página.', 'error');
+        }
+        throw err;
     } finally {
         isSavingAll = false;
         _savingAllGraceUntil = Date.now() + SAVING_ALL_GRACE_MS;
