@@ -2034,9 +2034,11 @@
             background: white;
             border: 1px solid #E5E5EA;
             padding: 6px;
-            /* 🔥 v2.52.28: remover min-height: 100px — estava a limitar intrinsic
-               height do grid item e a impedir o grid-auto-rows de crescer para
-               acomodar múltiplas linhas de flex-wrap. */
+            /* 🔥 v2.52.29: restaurar min-height: 100px — rows vazias precisam de
+               altura mínima para o cálculo do bloco expandido (rowSpan * 102)
+               bater certo. Com grid-auto-rows: auto (v2.52.28) rows ainda podem
+               crescer para acomodar wrap, porque min-height é só um floor. */
+            min-height: 100px;
             min-width: 0; /* 🔥 v2.52.28: permitir que o grid item encolha */
             position: relative;
             vertical-align: top;
