@@ -4576,14 +4576,31 @@ let _saveAllRowsChain = Promise.resolve();
 // dispara um event que volta ao próprio browser. Sem estes flags, o handler
 // mostrava dezenas de toasts "Actualização de outro utilizador" e podia fazer
 // rerenders destrutivos enquanto o estado local ainda estava em trânsito.
-// Grace de 2s cobre events em atraso. Presence garante que não há outro user
-// a editar nessa janela (a UI mostra quem está onde).
+// 🔥 v2.52.32: grace alargado para 5s (meses grandes geram events em stream
+// que podem chegar bem depois do saveAllRows terminar) + fallback robusto via
+// presence: se o próprio user é o único online, QUALQUER event é eco (nenhum
+// outro browser para originar UPDATE/INSERT/DELETE).
 let isSavingAll = false;
 let _savingAllGraceUntil = 0;
-const SAVING_ALL_GRACE_MS = 2000;
+const SAVING_ALL_GRACE_MS = 5000;
+
+function hasOtherActiveUsers() {
+    if (!onlineUsers || onlineUsers.size === 0) return false;
+    const myId = currentUser?.id;
+    for (const [uid] of onlineUsers) {
+        if (uid !== myId) return true;
+    }
+    return false;
+}
 
 function isEchoFromOwnSave() {
-    return isSaving || isSavingAll || Date.now() < _savingAllGraceUntil;
+    if (isSaving || isSavingAll) return true;
+    if (Date.now() < _savingAllGraceUntil) return true;
+    // 🔥 v2.52.32: defesa em profundidade — se não há outros users online, o
+    // event é forçosamente eco do próprio save (nenhum outro browser existe
+    // para o originar). Presence é a fonte de verdade confiável aqui.
+    if (!hasOtherActiveUsers()) return true;
+    return false;
 }
 
 async function saveAllRows() {
