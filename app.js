@@ -4320,11 +4320,17 @@ function queueSave(rowIndex, fieldKey, value) {
     if (!saveQueue.has(rowIndex)) {
         saveQueue.set(rowIndex, { fields: {}, timestamp: Date.now() });
     }
-    
+
     const rowData = saveQueue.get(rowIndex);
     rowData.fields[fieldKey] = value;
     rowData.timestamp = Date.now();
-    
+
+    // 🔥 v2.52.30: espelhar imediatamente no estado em memória. Antes, o valor
+    // só existia no <input> e na saveQueue — se um full rebuild disparasse por
+    // INSERT/DELETE de outro utilizador antes do save terminar, o render lia
+    // encomendasData.data (desactualizado) e o utilizador via o valor "sumir".
+    encomendasData.data[`${rowIndex}_${fieldKey}`] = value;
+
     console.log('📦 Adicionado à fila:', `linha ${rowIndex}, campo ${fieldKey}`);
     
     // Atualizar indicador visual
@@ -4894,10 +4900,25 @@ function handleRealtimeChange(payload) {
 // Re-render "suave": agrupa múltiplos eventos num único render, e evita
 // re-render enquanto o utilizador está a editar (não perder input).
 let _softRerenderTimer = null;
+let _softRerenderAttempts = 0; // 🔥 v2.52.30: contador de adiamentos por saves em voo
 function scheduleSoftRerender() {
     if (_softRerenderTimer) return;  // já agendado
     _softRerenderTimer = setTimeout(() => {
         _softRerenderTimer = null;
+
+        // 🔥 v2.52.30: escudo contra full rebuild durante saves em voo. Se há
+        // edits na fila ou um save a decorrer, adiar 1s (até 5x = 5s máximo).
+        // Isto evita que um INSERT/DELETE remoto dispare renderEncomendasGrid
+        // a meio de uma cadeia queueSave → processSaveQueue, onde os inputs
+        // em foco/blur podem perder estado entre o debounce e o UPSERT.
+        if ((saveQueue.size > 0 || isSaving) && _softRerenderAttempts < 5) {
+            _softRerenderAttempts++;
+            console.log(`⏸️ Re-render adiado (saves em voo, tentativa ${_softRerenderAttempts}/5)`);
+            setTimeout(scheduleSoftRerender, 1000);
+            return;
+        }
+        _softRerenderAttempts = 0;
+
         const activeEl = document.activeElement;
         const editing = activeEl && (
             activeEl.classList?.contains('excel-cell') ||
