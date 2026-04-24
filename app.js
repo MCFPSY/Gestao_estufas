@@ -3383,7 +3383,10 @@ function renderEncomendasGrid() {
         // Só mexe no display — encomendasData.data e row_order na BD ficam intactos.
         (function sortChronologically() {
             const monthOrder = { jan:0, fev:1, mar:2, abr:3, mai:4, jun:5, jul:6, ago:7, set:8, out:9, nov:10, dez:11 };
-            const useClientLocalGrouping = (currentMonth === 'mai' && currentYear === 2026);
+            // 🔥 v2.52.35: depois da migração (flag localStorage), os próprios row_order
+            // de Maio 2026 já reflectem a ordem cliente→local → sort especial deixa de
+            // ser preciso e permite que "+"/"-" funcionem onde o user clica.
+            const useClientLocalGrouping = (currentMonth === 'mai' && currentYear === 2026 && !isMaio2026Migrated());
             const pairs = datesToRender.map((date, displayIdx) => {
                 const oIdx = encomendasIndexMapping[displayIdx];
                 const p = {
@@ -3985,6 +3988,9 @@ function renderEncomendasGrid() {
     // 🔥 v2.52.4: Re-aplicar indicadores de células activas de outros utilizadores
     // (os indicadores são perdidos quando o grid é re-renderizado)
     try { updateCellIndicators(); } catch(e) { /* presence pode não estar activa */ }
+
+    // 🔥 v2.52.35: mostrar/esconder banner de migração de Maio 2026 conforme estado
+    try { renderMaio2026MigrationBanner(); } catch(e) { console.warn('migration banner err:', e); }
 
     } catch (error) {
         console.error('❌ ERRO ao renderizar grid:', error);
@@ -4725,6 +4731,158 @@ function showOtherUpdateToastThrottled() {
     if (!_otherUpdateToastTimer) {
         _otherUpdateToastTimer = setTimeout(flushOtherUpdateToast, OTHER_UPDATE_TOAST_WINDOW_MS - elapsed);
     }
+}
+
+// 🔥 v2.52.35: Migração one-shot de row_order para Maio 2026.
+// Contexto: o sort especial de v2.52.20 (agrupar por cliente→local dentro do
+// dia) deixou as novas linhas vazias sempre no fim do dia quando o user clica
+// "+" a meio — era isto que frustrava o Gonçalo. Esta migração renumera os
+// row_order persistidos em Maio 2026 pela mesma ordem que o sort especial
+// já produz visualmente. Uma vez aplicado, o sort especial pode desligar-se
+// (via flag localStorage) porque os próprios row_order já reflectem o
+// agrupamento — e a ordem por (data, row_order) reproduz o visual desejado
+// mas agora respeita linhas vazias inseridas a meio.
+const MAIO_2026_MIGRATED_FLAG = 'mapa_encomendas_maio_2026_migrated_v2_52_35';
+
+function isMaio2026Migrated() {
+    try { return localStorage.getItem(MAIO_2026_MIGRATED_FLAG) === '1'; } catch { return false; }
+}
+
+function markMaio2026Migrated() {
+    try { localStorage.setItem(MAIO_2026_MIGRATED_FLAG, '1'); } catch {}
+}
+
+// Calcula a nova ordem aplicando a mesma lógica do sort especial.
+// Devolve array ordenado de { originalIdx, date, cliente, local }.
+function computeMaio2026MigrationOrder() {
+    const monthOrder = { jan:0, fev:1, mar:2, abr:3, mai:4, jun:5, jul:6, ago:7, set:8, out:9, nov:10, dez:11 };
+    const pairs = encomendasData.dates.map((date, idx) => ({
+        date: date || '',
+        originalIdx: idx,
+        cliente: (encomendasData.data[`${idx}_cliente`] || '').trim(),
+        local: (encomendasData.data[`${idx}_local`] || '').trim()
+    }));
+    pairs.sort((a, b) => {
+        const aDateEmpty = !a.date || !a.date.trim();
+        const bDateEmpty = !b.date || !b.date.trim();
+        if (aDateEmpty && bDateEmpty) return a.originalIdx - b.originalIdx;
+        if (aDateEmpty) return 1;
+        if (bDateEmpty) return -1;
+        const [ad, am] = a.date.split('/');
+        const [bd, bm] = b.date.split('/');
+        const amNum = monthOrder[am] ?? 99;
+        const bmNum = monthOrder[bm] ?? 99;
+        if (amNum !== bmNum) return amNum - bmNum;
+        const adNum = parseInt(ad) || 0;
+        const bdNum = parseInt(bd) || 0;
+        if (adNum !== bdNum) return adNum - bdNum;
+        const aCliEmpty = !a.cliente;
+        const bCliEmpty = !b.cliente;
+        if (aCliEmpty && bCliEmpty) return a.originalIdx - b.originalIdx;
+        if (aCliEmpty) return 1;
+        if (bCliEmpty) return -1;
+        if (a.cliente !== b.cliente) return a.cliente.localeCompare(b.cliente, 'pt');
+        if (a.local !== b.local) return a.local.localeCompare(b.local, 'pt');
+        return a.originalIdx - b.originalIdx;
+    });
+    return pairs;
+}
+
+async function migrateMaio2026RowOrders() {
+    if (currentMonth !== 'mai' || currentYear !== 2026) {
+        showToast('⚠️ Só aplicável em Maio 2026', 'error'); return;
+    }
+    if (isMaio2026Migrated()) {
+        showToast('ℹ️ Maio 2026 já foi normalizado anteriormente', 'info'); return;
+    }
+    if (!encomendasData?.dates?.length) {
+        showToast('⚠️ Sem dados carregados', 'error'); return;
+    }
+    // Flush qualquer save local pendente primeiro
+    if (saveQueue && saveQueue.size > 0) {
+        await processSaveQueue();
+    }
+    const pairs = computeMaio2026MigrationOrder();
+    const changedCount = pairs.filter((p, newIdx) => p.originalIdx !== newIdx).length;
+
+    if (changedCount === 0) {
+        markMaio2026Migrated();
+        showToast('✅ Ordem de Maio 2026 já estava correcta — marcado como migrado', 'success');
+        try { renderEncomendasGrid(); } catch {}
+        return;
+    }
+
+    const ok = confirm(
+        `⚠️ MIGRAÇÃO Maio 2026\n\n` +
+        `• Vai renumerar ${changedCount} linha(s) (total ${pairs.length}).\n` +
+        `• O saveAllRows vai fazer DELETE+INSERT do mês inteiro.\n` +
+        `• Snapshot de recuperação v2.52.33 activo (se rede cair, restaura).\n\n` +
+        `Confirma que:\n` +
+        `✓ Fizeste tabela backup no Supabase\n` +
+        `✓ Descarregaste o CSV local\n` +
+        `✓ Toda a gente parou de usar a app\n\n` +
+        `Avançar?`
+    );
+    if (!ok) return;
+
+    // Reconstruir encomendasData.dates + data com a nova ordem
+    const newDates = pairs.map(p => p.date);
+    const newData = {};
+    encomendasData.fields.forEach(field => {
+        pairs.forEach((p, newIdx) => {
+            const oldKey = `${p.originalIdx}_${field.key}`;
+            const newKey = `${newIdx}_${field.key}`;
+            if (encomendasData.data[oldKey] !== undefined) {
+                newData[newKey] = encomendasData.data[oldKey];
+            }
+        });
+    });
+    encomendasData.dates = newDates;
+    encomendasData.data = newData;
+
+    try {
+        await saveAllRows('migrate-maio-2026-row-orders');
+        markMaio2026Migrated();
+        try { logHistory('MIGRATE_ROW_ORDER', { month: 'mai', year: 2026, changedCount, totalRows: pairs.length }); } catch {}
+        showToast(`✅ Migração concluída: ${changedCount} linha(s) renumeradas. "+" e "-" voltam a funcionar onde clicas.`, 'success');
+        try { renderEncomendasGrid(); } catch {}
+    } catch (e) {
+        console.error('❌ Erro na migração:', e);
+        // NÃO setar flag. Snapshot localStorage v2.52.33 permite recuperar no próximo load.
+        showToast('❌ Migração falhou. Recarrega a página — vais ver prompt de restauro automático.', 'error');
+        throw e;
+    }
+}
+
+// Banner visível no topo do Mapa Encomendas quando estamos em Maio 2026 e a
+// migração ainda não foi feita. Clicar → chama migrateMaio2026RowOrders().
+function renderMaio2026MigrationBanner() {
+    const container = document.querySelector('.excel-grid-container');
+    if (!container) return;
+    const existing = document.getElementById('maio-migration-banner');
+    const shouldShow = currentMonth === 'mai' && currentYear === 2026 && !isMaio2026Migrated();
+    if (!shouldShow) {
+        if (existing) existing.remove();
+        return;
+    }
+    if (existing) return; // já lá está
+    const banner = document.createElement('div');
+    banner.id = 'maio-migration-banner';
+    banner.style.cssText = 'background:#FFF4CC;border:1px solid #FFD60A;border-radius:8px;padding:12px 16px;margin-bottom:12px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;';
+    banner.innerHTML = `
+        <div style="flex:1;min-width:280px;font-size:13px;color:#5C4900;">
+            <strong>⚠️ Maio 2026 tem ordem dispersa</strong> (do dedup de v2.52.20).
+            Normalizar agora permite que <code>+</code> e <code>-</code> voltem a funcionar onde clicas.
+            Escreve na BD — certifica-te que tens backup antes.
+        </div>
+        <button id="maio-migration-btn" style="background:#FFD60A;color:#000;border:none;border-radius:6px;padding:8px 16px;font-weight:700;cursor:pointer;font-size:13px;">
+            🔧 Normalizar ordem
+        </button>
+    `;
+    container.insertBefore(banner, container.firstChild);
+    document.getElementById('maio-migration-btn').onclick = () => {
+        migrateMaio2026RowOrders().catch(err => console.error('Migration error:', err));
+    };
 }
 
 async function saveAllRows(opName) {
