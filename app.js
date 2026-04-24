@@ -3383,10 +3383,13 @@ function renderEncomendasGrid() {
         // Só mexe no display — encomendasData.data e row_order na BD ficam intactos.
         (function sortChronologically() {
             const monthOrder = { jan:0, fev:1, mar:2, abr:3, mai:4, jun:5, jul:6, ago:7, set:8, out:9, nov:10, dez:11 };
-            // 🔥 v2.52.35: depois da migração (flag localStorage), os próprios row_order
-            // de Maio 2026 já reflectem a ordem cliente→local → sort especial deixa de
-            // ser preciso e permite que "+"/"-" funcionem onde o user clica.
-            const useClientLocalGrouping = (currentMonth === 'mai' && currentYear === 2026 && !isMaio2026Migrated());
+            // 🔥 v2.52.36: sort especial REMOVIDO permanentemente.
+            // Após a migração v2.52.35 os row_order de Maio 2026 já estão na ordem
+            // cliente→local na BD — o sort normal (data, row_order) reproduz o
+            // mesmo layout mas respeita a posição exacta de linhas vazias inseridas
+            // via "+" no meio de um dia. Antes dependíamos da flag localStorage, o
+            // que se revelou frágil (cache/storage não pegar). Desligar por completo.
+            const useClientLocalGrouping = false;
             const pairs = datesToRender.map((date, displayIdx) => {
                 const oIdx = encomendasIndexMapping[displayIdx];
                 const p = {
@@ -3989,8 +3992,9 @@ function renderEncomendasGrid() {
     // (os indicadores são perdidos quando o grid é re-renderizado)
     try { updateCellIndicators(); } catch(e) { /* presence pode não estar activa */ }
 
-    // 🔥 v2.52.35: mostrar/esconder banner de migração de Maio 2026 conforme estado
-    try { renderMaio2026MigrationBanner(); } catch(e) { console.warn('migration banner err:', e); }
+    // 🔥 v2.52.36: banner de migração desactivado — sort especial já não depende
+    // da flag e a migração v2.52.35 foi concluída. A função permanece definida
+    // para referência/reuso mas nunca é chamada.
 
     } catch (error) {
         console.error('❌ ERRO ao renderizar grid:', error);
