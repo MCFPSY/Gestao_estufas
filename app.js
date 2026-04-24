@@ -4691,6 +4691,42 @@ function isEchoFromOwnSave() {
     return false;
 }
 
+// 🔥 v2.52.34: Throttle + agregação do toast "Actualização de outro utilizador".
+// Quando outro user faz saveAllRows (ex: +/-, importar PDF, mudar mês), a BD
+// emite 1 Realtime event por linha do mês inteiro (pode ser centenas). Sem
+// throttle, cada event disparava 1 toast → UI inundada. Agregamos em 1 toast
+// a cada OTHER_UPDATE_TOAST_WINDOW_MS, com contador total dessa janela. Os
+// dados em si continuam a ser actualizados normalmente via updateSingleRow;
+// isto só limita o alerta visual.
+let _otherUpdateToastLastAt = 0;
+let _otherUpdateToastPending = 0;
+let _otherUpdateToastTimer = null;
+const OTHER_UPDATE_TOAST_WINDOW_MS = 5000;
+
+function flushOtherUpdateToast() {
+    if (_otherUpdateToastTimer) { clearTimeout(_otherUpdateToastTimer); _otherUpdateToastTimer = null; }
+    const count = _otherUpdateToastPending;
+    _otherUpdateToastPending = 0;
+    _otherUpdateToastLastAt = Date.now();
+    if (count <= 0) return;
+    const msg = count === 1
+        ? '📡 Actualização de outro utilizador'
+        : `📡 ${count} actualizações de outros utilizadores`;
+    if (typeof showToast === 'function') showToast(msg, 'info');
+}
+
+function showOtherUpdateToastThrottled() {
+    _otherUpdateToastPending++;
+    const elapsed = Date.now() - _otherUpdateToastLastAt;
+    if (elapsed >= OTHER_UPDATE_TOAST_WINDOW_MS) {
+        flushOtherUpdateToast();
+        return;
+    }
+    if (!_otherUpdateToastTimer) {
+        _otherUpdateToastTimer = setTimeout(flushOtherUpdateToast, OTHER_UPDATE_TOAST_WINDOW_MS - elapsed);
+    }
+}
+
 async function saveAllRows(opName) {
     const previous = _saveAllRowsChain;
     let release;
@@ -5025,8 +5061,10 @@ function handleRealtimeChange(payload) {
         }
 
         // Não mostrar toast se a alteração é minha (isSaving indica que o save local está em curso)
+        // 🔥 v2.52.34: throttle+agrega para evitar flood quando outro user faz saveAllRows
+        // (DELETE+INSERT do mês inteiro emite centenas de events em segundos).
         if (!isSaving) {
-            showToast(`📡 Actualização de outro utilizador`, 'info');
+            showOtherUpdateToastThrottled();
         }
     }
 
