@@ -3560,10 +3560,7 @@ function renderEncomendasGrid() {
         deleteBtn.onclick = () => deleteRow(index);
         
         const dateSpan = document.createElement('span');
-        // 🔥 v2.52.37-debug: mostrar row_order (originalIndex) em cada linha
-        // para o user ver visualmente a ordem real na BD antes/depois de clicar "+".
-        const _debugOIdx = encomendasIndexMapping[index] ?? index;
-        dateSpan.innerHTML = `${date} <small style="background:#FFD60A;color:#000;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;font-family:monospace;">#${_debugOIdx}</small>`;
+        dateSpan.textContent = date;
         dateSpan.style.display = 'block';
         dateSpan.style.textAlign = 'center';
         dateSpan.style.width = '100%';
@@ -5884,16 +5881,11 @@ async function changeMonth(newMonth) {
 // Inserir nova linha logo abaixo da linha especificada
 async function insertRowBelow(index) {
     // 🔥 v2.51.27: Converter índice visual para índice real
-    // 🔥 v2.52.37-debug: usar ?? para não falhar em realIndex=0 (|| tratava 0 como falsy)
+    // 🔥 v2.52.38: usar ?? em vez de || para não falhar em realIndex=0 (|| tratava 0 como falsy)
     const realIndex = encomendasIndexMapping[index] ?? index;
     const currentDate = encomendasData.dates[realIndex];
-    const lengthBefore = encomendasData.dates.length;
 
     console.log(`➕ Inserindo nova linha abaixo de ${currentDate} (índice visual: ${index}, real: ${realIndex})`);
-    // 🔥 v2.52.37-debug: toast visível para o user reportar os números exactos
-    if (typeof showToast === 'function') {
-        showToast(`[DEBUG] + click: visIdx=${index} realIdx=${realIndex} data=${currentDate} len=${lengthBefore}`, 'info');
-    }
     
     // 1. Inserir nova data no array (na posição realIndex + 1)
     encomendasData.dates.splice(realIndex + 1, 0, currentDate);
@@ -5930,14 +5922,6 @@ async function insertRowBelow(index) {
 
     // 3. Re-renderizar grid
     renderEncomendasGrid();
-
-    // 🔥 v2.52.37-debug: após render, reportar onde a nova linha efectivamente ficou
-    // (display index baseado em encomendasIndexMapping que foi reescrito pelo sort)
-    const finalDisplayIdx = encomendasIndexMapping.indexOf(realIndex + 1);
-    const lengthAfter = encomendasData.dates.length;
-    if (typeof showToast === 'function') {
-        showToast(`[DEBUG] após render: nova linha visIdx=${finalDisplayIdx}, len ${lengthBefore}→${lengthAfter}`, 'info');
-    }
 
     // 4. Salvar no Supabase (reindexar todas as linhas)
     await saveAllRows();
