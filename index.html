@@ -2056,7 +2056,19 @@
         .calendario-day-cell:hover {
             background: #FAFAFA;
         }
-        
+
+        /* 🔥 v2.52.39: a linha "Sem Horário" pode ter muitas cargas (ex: 9-10 num dia
+           cheio). Antes, com overflow:visible, as cargas excedentes transbordavam
+           visualmente para baixo e pareciam estar nas slots de horário (06-08, 08-10,
+           10-12). Agora a cell SEM_HORARIO é truncada em 200px de altura com scroll
+           interno: o user vê 2-3 linhas de wrap e faz scroll para ver as restantes,
+           sem invadir o layout das outras rows. Aplica-se apenas a esta slot. */
+        .calendario-day-cell[data-slot="SEM_HORARIO"] {
+            max-height: 200px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
         .calendario-event {
             background: linear-gradient(135deg, #007AFF 0%, #0051D5 100%);
             color: white;

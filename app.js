@@ -6439,7 +6439,10 @@ function renderCalendarioSemanal() {
         weekDates.forEach(d => {
             const dayCell = document.createElement('div');
             dayCell.className = 'calendario-day-cell';
-            
+            // 🔥 v2.52.39: marcar slot na cell para CSS poder dar tratamento
+            // específico (ex: scroll na linha SEM_HORARIO quando há muitas cargas).
+            dayCell.setAttribute('data-slot', slot);
+
             const celKey = `${d.dateStr}_${slot}`;
             
             // Encontrar cargas que COMEÇAM neste slot
@@ -8342,7 +8345,9 @@ window.openCargasDetalhe = function(dateKey) {
         // Célula do dia
         const dayCell = document.createElement('div');
         dayCell.className = 'calendario-day-cell';
-        
+        // 🔥 v2.52.39: mesmo tratamento no modal Resumo do Dia
+        dayCell.setAttribute('data-slot', slot);
+
         const celKey = `${dateKey}_${slot}`;
         const cargasNesteSlot = cargas.filter(c => c.slots.includes(slot));
         
