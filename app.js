@@ -2647,7 +2647,11 @@ let encomendasData = {
         { label: 'HORÁRIO', key: 'horario_carga', color: '#FFF4E6', width: '150px', type: 'select' },  // 🆕 v2.51.0
         { label: 'OBSERVAÇÕES', key: 'obs', color: '#FFFFFF', width: '200px' }
     ],
-    data: {}  // {date_field: value}
+    data: {},  // {date_field: value}
+    // 🔥 v2.52.40: estado de destaques amarelos por célula. Estrutura:
+    // { [rowIndex: number]: string[] }  // array de field keys destacados na linha.
+    // Persistido na coluna jsonb mapa_encomendas.highlighted_fields.
+    highlights: {}
 };
 
 // 🔥 v2.51.27: Mapeamento de índices (visual -> real) para suportar filtros de semana
@@ -3587,6 +3591,11 @@ function renderEncomendasGrid() {
             
             const td = document.createElement('td');
             td.className = 'excel-cell';
+            // 🔥 v2.52.40: aplicar classe destaque persistida (vinda da BD ou edit local)
+            if (encomendasData.highlights && encomendasData.highlights[originalIndex]
+                && encomendasData.highlights[originalIndex].includes(field.key)) {
+                td.classList.add('excel-cell-highlighted');
+            }
             td.setAttribute('data-row-index', index);  // Index filtrado (display)
             td.setAttribute('data-original-index', originalIndex);  // Index global (save)
             td.setAttribute('data-date', date);
@@ -4178,6 +4187,8 @@ async function loadEncomendasData() {
             // Reconstruir dates e data
             encomendasData.dates = [];
             encomendasData.data = {};
+            // 🔥 v2.52.40: reset de highlights — vão ser preenchidos pelo forEach abaixo
+            encomendasData.highlights = {};
 
             data.forEach((row) => {
                 // 🔥 BUGFIX v2.51.1: Usar row.row_order (índice original da BD) em vez de rowIndex (índice do array filtrado)
@@ -4197,6 +4208,11 @@ async function loadEncomendasData() {
                         encomendasData.data[cellKey] = row[field.key];
                     }
                 });
+
+                // 🔥 v2.52.40: carregar destaques amarelos persistidos
+                if (Array.isArray(row.highlighted_fields) && row.highlighted_fields.length > 0) {
+                    encomendasData.highlights[originalIndex] = [...row.highlighted_fields];
+                }
             });
 
             // 🔥 BUGFIX v2.52.1: Verificar se o mês está completo (todos os dias úteis presentes)
@@ -4928,6 +4944,8 @@ async function _saveAllRowsImpl() {
     const snapDates = [...encomendasData.dates];  // Cópia profunda do array
     const snapData = { ...encomendasData.data };  // Cópia do objeto de dados
     const snapFields = encomendasData.fields;
+    // 🔥 v2.52.40: snapshot dos destaques amarelos para preservar em DELETE+INSERT
+    const snapHighlights = { ...(encomendasData.highlights || {}) };
 
     console.log(`💾 Salvando todas as linhas para ${snapMonth}/${snapYear} (${snapDates.length} linhas)...`);
 
@@ -4959,6 +4977,12 @@ async function _saveAllRowsImpl() {
                 const cellKey = `${index}_${field.key}`;
                 row[field.key] = snapData[cellKey] || '';
             });
+
+            // 🔥 v2.52.40: preservar destaques no DELETE+INSERT (sem isto, +/-, importar
+            // PDF, ou qualquer operação saveAllRows apagaria os destaques)
+            if (Array.isArray(snapHighlights[index]) && snapHighlights[index].length > 0) {
+                row.highlighted_fields = snapHighlights[index];
+            }
 
             return row;
         });
@@ -5213,6 +5237,41 @@ function handleRealtimeChange(payload) {
             }
         });
 
+        // 🔥 v2.52.40: sync de destaques amarelos (highlighted_fields jsonb).
+        // Aplica/remove a classe excel-cell-highlighted nas cells em DOM consoante o
+        // novo array. Se a linha nem está no DOM (linha nova), o estado fica em memória
+        // e a próxima render aplica a classe.
+        if (Array.isArray(row.highlighted_fields)) {
+            const newHighlights = row.highlighted_fields;
+            if (!encomendasData.highlights) encomendasData.highlights = {};
+            const oldHighlights = encomendasData.highlights[rowIndex] || [];
+            if (newHighlights.length > 0) {
+                encomendasData.highlights[rowIndex] = [...newHighlights];
+            } else {
+                delete encomendasData.highlights[rowIndex];
+            }
+            // Aplicar diff no DOM (cells com data-original-index === rowIndex)
+            try {
+                const table = document.getElementById('encomendas-grid');
+                if (table) {
+                    const newSet = new Set(newHighlights);
+                    const oldSet = new Set(oldHighlights);
+                    // Adicionar classe nos novos
+                    newSet.forEach(fk => {
+                        if (oldSet.has(fk)) return;
+                        const cell = table.querySelector(`.excel-cell[data-original-index="${rowIndex}"][data-field="${fk}"]`);
+                        if (cell) cell.classList.add('excel-cell-highlighted');
+                    });
+                    // Remover classe nos que saíram
+                    oldSet.forEach(fk => {
+                        if (newSet.has(fk)) return;
+                        const cell = table.querySelector(`.excel-cell[data-original-index="${rowIndex}"][data-field="${fk}"]`);
+                        if (cell) cell.classList.remove('excel-cell-highlighted');
+                    });
+                }
+            } catch (e) { console.warn('🖍️ erro ao aplicar diff de destaques:', e); }
+        }
+
         if (!wasKnown && eventType === 'INSERT') {
             // Linha nova — fazer soft re-render (a célula ainda não existe no DOM)
             console.log('🆕 Linha nova — soft re-render');
@@ -5239,6 +5298,8 @@ function handleRealtimeChange(payload) {
             encomendasData.fields.forEach(field => {
                 delete encomendasData.data[`${rowIndex}_${field.key}`];
             });
+            // 🔥 v2.52.40: limpar destaques da linha apagada
+            if (encomendasData.highlights) delete encomendasData.highlights[rowIndex];
         }
         scheduleSoftRerender();
     }
@@ -5920,6 +5981,19 @@ async function insertRowBelow(index) {
     
     encomendasData.data = newData;
 
+    // 🔥 v2.52.40: deslocar destaques amarelos para acompanhar o novo row_order.
+    // Linhas a partir de realIndex+1 ficam +1 — re-mapear keys do objecto highlights.
+    if (encomendasData.highlights && Object.keys(encomendasData.highlights).length > 0) {
+        const newHighlights = {};
+        Object.keys(encomendasData.highlights).forEach(k => {
+            const i = parseInt(k);
+            if (Number.isNaN(i)) return;
+            const newI = i > realIndex ? i + 1 : i;
+            newHighlights[newI] = encomendasData.highlights[k];
+        });
+        encomendasData.highlights = newHighlights;
+    }
+
     // 3. Re-renderizar grid
     renderEncomendasGrid();
 
@@ -5965,6 +6039,19 @@ async function deleteRow(index) {
         });
 
         encomendasData.data = newData;
+
+        // 🔥 v2.52.40: deslocar destaques amarelos. Linha realIndex apagada
+        // (highlight perde-se), linhas > realIndex ficam -1.
+        if (encomendasData.highlights && Object.keys(encomendasData.highlights).length > 0) {
+            const newHighlights = {};
+            Object.keys(encomendasData.highlights).forEach(k => {
+                const i = parseInt(k);
+                if (Number.isNaN(i) || i === realIndex) return;
+                const newI = i > realIndex ? i - 1 : i;
+                newHighlights[newI] = encomendasData.highlights[k];
+            });
+            encomendasData.highlights = newHighlights;
+        }
 
         logHistory('DELETE', {
             date,
@@ -6790,16 +6877,17 @@ document.addEventListener('fullscreenchange', () => {
 });
 
 // 🔥 v2.51.34c: Modo de destaque amarelo para células
+// 🔥 v2.52.40: persistência na BD (coluna jsonb highlighted_fields) + sync via Realtime
 let highlightModeActive = false;
 
 function toggleHighlightMode() {
     highlightModeActive = !highlightModeActive;
     const btn = document.getElementById('highlight-btn');
-    
+
     if (highlightModeActive) {
         btn.classList.add('highlight-mode-active');
-        btn.textContent = '🖍️ Modo Ativo (clique nas células)';
-        showToast('🖍️ Modo destaque ATIVO - clique nas células para destacar', 'info');
+        btn.textContent = '🖍️ Modo Ativo (clique para pintar/despintar)';
+        showToast('🖍️ Modo destaque ATIVO — clica numa célula para pintar a amarelo, clica de novo na mesma para despintar', 'info');
     } else {
         btn.classList.remove('highlight-mode-active');
         btn.textContent = '🖍️ Destacar Célula';
@@ -6813,18 +6901,39 @@ document.addEventListener('click', function(e) {
     if (highlightModeActive && e.target.classList.contains('excel-cell') && e.target.contentEditable === 'true') {
         e.preventDefault();
         e.stopPropagation();
-        
-        // Toggle destaque
-        if (e.target.classList.contains('excel-cell-highlighted')) {
-            e.target.classList.remove('excel-cell-highlighted');
-            console.log('🖍️ Destaque removido da célula');
-        } else {
-            e.target.classList.add('excel-cell-highlighted');
-            console.log('🖍️ Célula destacada em amarelo');
+
+        const cell = e.target;
+        const originalIndex = parseInt(cell.getAttribute('data-original-index'));
+        const fieldKey = cell.getAttribute('data-field');
+        if (Number.isNaN(originalIndex) || !fieldKey) {
+            console.warn('🖍️ célula sem data-original-index/data-field — não é possível persistir');
+            return;
         }
-        
-        // Salvar estado (opcional - para persistir destaques)
-        // saveHighlightState();
+
+        // Toggle no DOM
+        const isNowHighlighted = !cell.classList.contains('excel-cell-highlighted');
+        cell.classList.toggle('excel-cell-highlighted', isNowHighlighted);
+
+        // 🔥 v2.52.40: actualizar estado em memória + persistir via saveQueue
+        if (!encomendasData.highlights) encomendasData.highlights = {};
+        const current = new Set(encomendasData.highlights[originalIndex] || []);
+        if (isNowHighlighted) current.add(fieldKey);
+        else current.delete(fieldKey);
+        const newArray = Array.from(current);
+        if (newArray.length > 0) {
+            encomendasData.highlights[originalIndex] = newArray;
+        } else {
+            delete encomendasData.highlights[originalIndex];
+        }
+        // Envia para a BD pelo mesmo caminho que qualquer edit (debounce + UPSERT).
+        // O queueSave também espelha em encomendasData.data; aqui passamos o array
+        // como valor do "campo" highlighted_fields — saveRowData faz spread no UPSERT.
+        try {
+            queueSave(originalIndex, 'highlighted_fields', newArray);
+        } catch (err) {
+            console.error('🖍️ erro ao agendar save do destaque:', err);
+        }
+        console.log(`🖍️ ${isNowHighlighted ? 'destacada' : 'destaque removido'} — linha ${originalIndex}, campo ${fieldKey}`);
     }
 });
 
