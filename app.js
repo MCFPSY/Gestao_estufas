@@ -8744,8 +8744,13 @@ function forceZoomReset() {
         e.preventDefault();
     });
     
+    // 🔥 v2.52.41: condição corrigida para Android.
+    // ANTES: `if (e.scale !== 1)` — propriedade WebKit-only. No iPhone funcionava
+    // (scale=1 em scroll normal), no Android Chrome `e.scale` é undefined →
+    // `undefined !== 1` é true → preventDefault em CADA touchmove → scroll bloqueado.
+    // AGORA: bloquear apenas em pinch real (>=2 dedos), o que era a intenção original.
     document.addEventListener('touchmove', function(e) {
-        if (e.scale !== 1) {
+        if (e.touches && e.touches.length >= 2) {
             e.preventDefault();
         }
     }, { passive: false });
