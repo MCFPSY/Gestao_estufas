@@ -1285,6 +1285,28 @@ function applyModalSecagemMode(readOnly) {
     const dialog = modal.querySelector('.modal-dialog');
     if (dialog) dialog.classList.toggle('modal-dialog--readonly', readOnly);
 
+    // 🔥 v2.52.45: em modo visualização, colapsar a 1ª section (Configuração Geral)
+    // por defeito. O user pode clicar no header para expandir/voltar a colapsar.
+    // O foco visual fica na matriz de paletes e observações, que são o que importa.
+    const firstSection = modal.querySelector('.modal-section');
+    if (firstSection) {
+        if (readOnly) {
+            firstSection.classList.add('modal-section--collapsible', 'modal-section--collapsed');
+            const header = firstSection.querySelector('.section-header');
+            if (header && !header.dataset.collapseInstalled) {
+                header.dataset.collapseInstalled = '1';
+                header.addEventListener('click', () => {
+                    // só toggle se a section ainda for collapsible (modo readonly)
+                    if (firstSection.classList.contains('modal-section--collapsible')) {
+                        firstSection.classList.toggle('modal-section--collapsed');
+                    }
+                });
+            }
+        } else {
+            firstSection.classList.remove('modal-section--collapsible', 'modal-section--collapsed');
+        }
+    }
+
     // Texto do botão Cancelar muda para "Fechar" em read-only
     const cancelBtn = modal.querySelector('.btn-secondary');
     if (cancelBtn) cancelBtn.textContent = readOnly ? 'Fechar' : 'Cancelar';

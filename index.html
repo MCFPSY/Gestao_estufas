@@ -1145,6 +1145,25 @@
            Preencher Células / Limpar Seleção" em modo visualização — só faz
            sentido em modo edição, onde o user pode preencher cells. */
         .modal-dialog--readonly .cargo-form-panel { display: none; }
+
+        /* 🔥 v2.52.45: secção colapsável (usada em Configuração Geral em modo
+           visualização). Por defeito vem colapsada — clicar no header expande. */
+        .modal-section--collapsible .section-header {
+            cursor: pointer;
+            user-select: none;
+        }
+        .modal-section--collapsible .section-header::after {
+            content: ' ▼';
+            margin-left: 8px;
+            font-size: 11px;
+            opacity: 0.5;
+        }
+        .modal-section--collapsed .section-header::after {
+            content: ' ▶';
+        }
+        .modal-section--collapsed > *:not(.section-header) {
+            display: none !important;
+        }
         
         .modal-sidebar {
             width: 60px;
