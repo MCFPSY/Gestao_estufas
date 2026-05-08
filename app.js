@@ -1278,6 +1278,13 @@ function applyModalSecagemMode(readOnly) {
         banner.remove();
     }
 
+    // 🔥 v2.52.43: em modo visualização, o modal expande sem scroll interno para
+    // mostrar tudo de uma vez (TV/Android Box não tem scroll cómodo). Em modo
+    // edição mantém max-height: 90vh + scroll interno como antes.
+    modal.classList.toggle('modal--readonly', readOnly);
+    const dialog = modal.querySelector('.modal-dialog');
+    if (dialog) dialog.classList.toggle('modal-dialog--readonly', readOnly);
+
     // Texto do botão Cancelar muda para "Fechar" em read-only
     const cancelBtn = modal.querySelector('.btn-secondary');
     if (cancelBtn) cancelBtn.textContent = readOnly ? 'Fechar' : 'Cancelar';

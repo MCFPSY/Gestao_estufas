@@ -1126,6 +1126,21 @@
             overflow: hidden;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
+
+        /* 🔥 v2.52.43: Em modo visualização, o modal expande verticalmente para
+           mostrar todos os campos (matriz de paletes 5ª linha + observações) sem
+           scroll interno. Backdrop ganha scroll fallback caso ainda assim
+           ultrapasse a viewport. Em modo edição mantém-se o comportamento
+           original (max-height 90vh + scroll interno).
+           Motivação: na TV/Android Box o scroll interno passava despercebido. */
+        .modal--readonly { overflow-y: auto; }
+        .modal--readonly.active {
+            align-items: flex-start;
+            padding-top: 40px;
+            padding-bottom: 40px;
+        }
+        .modal-dialog--readonly { max-height: none; }
+        .modal-dialog--readonly .modal-body { overflow-y: visible; }
         
         .modal-sidebar {
             width: 60px;
