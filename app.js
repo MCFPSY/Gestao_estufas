@@ -4964,7 +4964,7 @@ async function _saveAllRowsImpl() {
 
     try {
         // 1. Preparar todas as linhas PRIMEIRO (antes de apagar)
-        const rows = snapDates.map((date, index) => {
+        const rowsRaw = snapDates.map((date, index) => {
             const row = {
                 month: snapMonth,     // Usar snapshot, NÃO currentMonth
                 year: snapYear,       // Usar snapshot, NÃO currentYear
@@ -4986,6 +4986,25 @@ async function _saveAllRowsImpl() {
 
             return row;
         });
+
+        // 🔥 v2.52.42: filtrar lixo — não persistir linhas com date='' E sem nenhum
+        // outro conteúdo. Causa raiz da corrupção que afectou abr/mai/jun/jul 2026:
+        // gaps de row_order na BD eram preenchidos em memória com '' (loadEncomendasData
+        // linha ~4187), e cada saveAllRows seguinte gravava esses '' de volta na BD,
+        // amplificando o lixo a cada edição (Abril 37→Julho 883 linhas vazias). Filter
+        // aqui quebra o ciclo. Linhas sem date mas com cliente/transp/etc preenchido
+        // (edge case) continuam a ser preservadas para não perder dados legítimos.
+        const CONTENT_FIELDS = ['cliente','local','medida','qtd','transp','enc','nviagem','obs','et','horario_carga'];
+        const rows = rowsRaw.filter(row => {
+            if (row.date && String(row.date).trim()) return true; // tem data → keep
+            const hasContent = CONTENT_FIELDS.some(k => row[k] && String(row[k]).trim() !== '');
+            return hasContent;
+        });
+        const skipped = rowsRaw.length - rows.length;
+        if (skipped > 0) {
+            console.warn(`🧹 [saveAllRows] ${skipped} linha(s) vazia(s) descartadas (não persistidas na BD)`);
+        }
+
 
         // 2. Verificar se o mês mudou entre a captura e agora
         if (currentMonth !== snapMonth || currentYear !== snapYear) {
