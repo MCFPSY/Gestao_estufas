@@ -1141,6 +1141,10 @@
         }
         .modal-dialog--readonly { max-height: none; }
         .modal-dialog--readonly .modal-body { overflow-y: visible; }
+        /* 🔥 v2.52.44: esconder painel "Selecione células / Tipo Palete /
+           Preencher Células / Limpar Seleção" em modo visualização — só faz
+           sentido em modo edição, onde o user pode preencher cells. */
+        .modal-dialog--readonly .cargo-form-panel { display: none; }
         
         .modal-sidebar {
             width: 60px;
