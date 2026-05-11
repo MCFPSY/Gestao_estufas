@@ -2226,25 +2226,45 @@ function loadMatrixData(cargoArray) {
             }
             
             // 🎯 v2.50.0: Carregar bloco com células concatenadas
-            const cellIds = posicao.split(',');
+            // 🔥 v2.52.46: Defesa anti-overlap. Se um save antigo deixou a mesma
+            // célula em dois blocos diferentes (ex: SEC_E3_024 tinha "1-1:uk100"
+            // E "1-1,1-2,2-1,3-1,4-1:10 PR080" — 1-1 duas vezes), o bloco que
+            // chegasse depois SOBRESCREVIA o anterior em matrixData mas mantinha
+            // blockCells velhas, e o save seguinte ressuscitava o zombie.
+            // Agora filtramos células já ocupadas por blocos anteriores ANTES de
+            // pintar/registar. blockCells fica em sincronia com matrixData.
+            // Efeito secundário: o próximo save de qualquer secagem corrompida
+            // grava o estado limpo. Self-healing.
+            const rawCellIds = posicao.split(',');
+            const cellIds = rawCellIds.filter(id => !(id in matrixData));
+
+            if (cellIds.length === 0) {
+                console.warn(`   🛡️ Cargo ignorado — todas as células já ocupadas: "${posicao}" → "${tipo}"`);
+                return;
+            }
+            if (cellIds.length < rawCellIds.length) {
+                const dropped = rawCellIds.filter(id => !cellIds.includes(id));
+                console.warn(`   🛡️ Bloco parcial — célula(s) já ocupada(s) por bloco anterior ignorada(s): [${dropped.join(',')}] em "${posicao}" → "${tipo}"`);
+            }
+
             const blockId = `block-${Date.now()}-${Math.random()}`;
-            
+
             cellIds.forEach(cellId => {
                 const cell = document.querySelector(`[data-cell="${cellId}"]`);
                 if (cell) {
                     cell.classList.add('filled');
                     cell.style.backgroundColor = blockColor; // Aplicar cor
                     cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>`;
-                    
+
                     matrixData[cellId] = {
                         tipo,
                         blockId,
                         blockColor,
-                        blockCells: cellIds
+                        blockCells: cellIds // ← já filtrado, sem células de blocos anteriores
                     };
                 }
             });
-            
+
             console.log(`   📥 Carregado bloco (${cellIds.length} células) → cor ${blockColor}`);
         });
     }
