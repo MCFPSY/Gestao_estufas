@@ -2694,7 +2694,11 @@ let encomendasData = {
         { label: 'ENC.', key: 'enc', color: '#FFFFFF', width: '100px' },
         { label: 'NºVIAGEM', key: 'nviagem', color: '#FFFFFF', width: '100px' },
         { label: 'HORÁRIO', key: 'horario_carga', color: '#FFF4E6', width: '150px', type: 'select' },  // 🆕 v2.51.0
-        { label: 'OBSERVAÇÕES', key: 'obs', color: '#FFFFFF', width: '200px' }
+        { label: 'OBSERVAÇÕES', key: 'obs', color: '#FFFFFF', width: '200px' },
+        // 🆕 v2.52.47: coluna interna "NOTAS" — não vai para impressão (executePrintCargas
+        // e MANUAL_COLS são hardcoded, ignoram qualquer coluna nova em fields). Render,
+        // save, load, paste, copy, drag-fill iteram encomendasData.fields → entram aqui automaticamente.
+        { label: 'NOTAS', key: 'notas', color: '#FFFFFF', width: '200px' }
     ],
     data: {},  // {date_field: value}
     // 🔥 v2.52.40: estado de destaques amarelos por célula. Estrutura:
@@ -4316,7 +4320,7 @@ async function loadEncomendasData() {
                             sem: weekNum.toString(),
                             cliente: '', local: '', medida: '', qtd: '',
                             transp: '', et: '', enc: '', nviagem: '',
-                            horario_carga: '', obs: ''
+                            horario_carga: '', obs: '', notas: ''  // 🆕 v2.52.47
                         });
                     }
                 }
