@@ -2622,6 +2622,54 @@
         <!-- Tab 5: Utilizadores -->
     </div>
 
+    <!-- 🆕 v2.52.51: Modal de detalhe do painel andon -->
+    <div class="modal" id="modal-painel-detail">
+        <div class="modal-dialog" style="max-width: 560px;">
+            <div class="modal-sidebar" style="background: #FF9500;"></div>
+            <div class="modal-body">
+                <button class="modal-close" onclick="closePainelDetail()">×</button>
+                <div class="modal-header">
+                    <h3 id="painel-detail-title">🏭 Painel</h3>
+                    <p class="modal-subtitle" id="painel-detail-subtitle">—</p>
+                </div>
+                <div style="padding: 16px 24px;">
+                    <div style="background:#F5F5F7;padding:12px 14px;border-radius:8px;font-size:13px;color:#333;margin-bottom:16px;line-height:1.7;">
+                        <div><strong>ID:</strong> <code id="painel-detail-id" style="background:#fff;padding:2px 6px;border-radius:4px;font-size:12px;">—</code></div>
+                        <div><strong>Fábrica:</strong> <span id="painel-detail-fabrica">—</span></div>
+                        <div><strong>Localização:</strong> <span id="painel-detail-localizacao">—</span></div>
+                        <div><strong>IP local:</strong> <code id="painel-detail-ip" style="background:#fff;padding:2px 6px;border-radius:4px;font-size:12px;">—</code></div>
+                        <div><strong>Estado actual:</strong> <span id="painel-detail-state-pill" style="display:inline-block;padding:2px 8px;border-radius:10px;font-weight:600;font-size:12px;background:#34C759;color:#fff;">—</span></div>
+                        <div><strong>Mensagem:</strong> <span id="painel-detail-message" style="font-weight:600;">—</span></div>
+                        <div style="font-size:11px;color:#999;margin-top:6px;" id="painel-detail-meta">—</div>
+                    </div>
+
+                    <div style="margin-bottom:18px;">
+                        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;">Mudar estado:</label>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button type="button" onclick="quickApplyState('verde')" style="flex:1;min-width:90px;background:#34C759;color:white;border:none;padding:14px 8px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🟢 Verde<br><small style="font-weight:400;">OK</small></button>
+                            <button type="button" onclick="quickApplyState('amarelo')" style="flex:1;min-width:90px;background:#FF9500;color:#1d1d1f;border:none;padding:14px 8px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🟡 Amarelo<br><small style="font-weight:400;">ATENÇÃO</small></button>
+                            <button type="button" onclick="quickApplyState('vermelho')" style="flex:1;min-width:90px;background:#FF3B30;color:white;border:none;padding:14px 8px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🔴 Vermelho<br><small style="font-weight:400;">AVARIA</small></button>
+                        </div>
+                        <small style="font-size:11px;color:#999;display:block;margin-top:6px;">Os botões aplicam a mensagem padrão. Para texto custom usa o campo em baixo.</small>
+                    </div>
+
+                    <div style="margin-bottom:16px;">
+                        <label for="painel-custom-message" style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;">Mensagem custom (mantém estado actual):</label>
+                        <div style="display:flex;gap:8px;">
+                            <input type="text" id="painel-custom-message" placeholder="Ex: AVARIA L3 14:32" maxlength="40" style="flex:1;padding:10px 14px;border:1px solid #D1D1D6;border-radius:8px;font-size:14px;box-sizing:border-box;" />
+                            <button type="button" class="btn-primary" onclick="applyCustomMessage()" style="padding:10px 16px;white-space:nowrap;">Aplicar</button>
+                        </div>
+                    </div>
+
+                    <div style="display:flex;gap:8px;border-top:1px solid #E5E5EA;padding-top:14px;">
+                        <button type="button" class="btn-secondary" onclick="pingPainel()" style="flex:1;padding:10px;">📡 Testar conectividade</button>
+                        <button type="button" class="btn-secondary" onclick="closePainelDetail()" style="flex:1;padding:10px;">Fechar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal Secagem -->
     <div class="modal" id="modal-secagem">
         <div class="modal-dialog">

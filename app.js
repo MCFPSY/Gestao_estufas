@@ -9425,7 +9425,9 @@ function renderPaineisCard(p) {
     const lastUpdated = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
 
     return `
-        <div class="painel-card" data-painel-id="${_paineisEscape(p.id)}" style="
+        <div class="painel-card" data-painel-id="${_paineisEscape(p.id)}"
+            onclick="openPainelDetail('${_paineisEscape(p.id)}')"
+            style="
             position: relative;
             background: ${bg};
             color: ${fg};
@@ -9478,12 +9480,141 @@ function setupPaineisRealtime() {
             (payload) => {
                 console.log(`🏭 Realtime paineis_andon: ${payload.eventType} ${payload.new?.id || payload.old?.id || ''}`);
                 // Re-load completo é mais simples e os volumes são pequenos (~10-30 paineis)
-                loadPaineis();
+                loadPaineis().then(() => {
+                    // 🆕 v2.52.51: se o modal de detalhe estiver aberto neste painel, refresh visual
+                    if (_selectedPainelId && payload.new?.id === _selectedPainelId) {
+                        _refreshPainelDetailFromCache();
+                    }
+                });
             }
         )
         .subscribe((status) => {
             console.log(`🏭 Realtime paineis subscribe status: ${status}`);
         });
+}
+
+// ===================================================================
+// 🆕 v2.52.51: Modal de detalhe (commit 3/5)
+// Permite mudar estado (verde/amarelo/vermelho) e mensagem custom.
+// Escrita: UPDATE paineis_andon + INSERT paineis_andon_historico.
+// Nunca toca mapa_encomendas, secagens, secagem_cargo, etc.
+// ===================================================================
+
+let _selectedPainelId = null;
+
+function openPainelDetail(painelId) {
+    const p = paineisData.find(x => x.id === painelId);
+    if (!p) {
+        showToast('❌ Painel não encontrado em cache local', 'error');
+        return;
+    }
+    _selectedPainelId = painelId;
+    _refreshPainelDetailFromCache();
+    document.getElementById('modal-painel-detail').classList.add('active');
+}
+
+function closePainelDetail() {
+    document.getElementById('modal-painel-detail').classList.remove('active');
+    _selectedPainelId = null;
+}
+
+function _refreshPainelDetailFromCache() {
+    const p = paineisData.find(x => x.id === _selectedPainelId);
+    if (!p) return;
+
+    document.getElementById('painel-detail-title').textContent = `🏭 ${p.nome}`;
+    document.getElementById('painel-detail-subtitle').textContent = `Fábrica ${p.fabrica} · ${p.localizacao || 'sem localização'}`;
+    document.getElementById('painel-detail-id').textContent = p.id;
+    document.getElementById('painel-detail-fabrica').textContent = p.fabrica;
+    document.getElementById('painel-detail-localizacao').textContent = p.localizacao || '—';
+    document.getElementById('painel-detail-ip').textContent = p.ip_local;
+    document.getElementById('painel-detail-message').textContent = p.mensagem_atual || '—';
+
+    const pill = document.getElementById('painel-detail-state-pill');
+    const stateColors = { verde: '#34C759', amarelo: '#FF9500', vermelho: '#FF3B30' };
+    const stateLabels = { verde: '🟢 Verde', amarelo: '🟡 Amarelo', vermelho: '🔴 Vermelho' };
+    pill.textContent = stateLabels[p.estado_atual] || p.estado_atual;
+    pill.style.background = stateColors[p.estado_atual] || '#999';
+    pill.style.color = (p.estado_atual === 'amarelo') ? '#1d1d1f' : '#fff';
+
+    const meta = document.getElementById('painel-detail-meta');
+    const updateStr = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
+    const onlineStr = p.online ? '🟢 online' : '⚫ offline (bridge ainda não instalado)';
+    meta.textContent = `Última actualização: ${updateStr} · ${onlineStr}`;
+}
+
+async function quickApplyState(state) {
+    if (!_selectedPainelId) return;
+    const defaultMessages = { verde: 'OK', amarelo: 'ATENÇÃO', vermelho: 'AVARIA' };
+    const msg = defaultMessages[state] || 'OK';
+    await _applyPanelChange(_selectedPainelId, state, msg);
+}
+
+async function applyCustomMessage() {
+    if (!_selectedPainelId) return;
+    const input = document.getElementById('painel-custom-message');
+    const msg = (input.value || '').trim();
+    if (!msg) {
+        showToast('⚠️ Escreve uma mensagem primeiro', 'error');
+        input.focus();
+        return;
+    }
+    const p = paineisData.find(x => x.id === _selectedPainelId);
+    if (!p) return;
+    await _applyPanelChange(_selectedPainelId, p.estado_atual, msg);
+    input.value = '';
+}
+
+async function _applyPanelChange(painelId, newState, newMessage) {
+    const p = paineisData.find(x => x.id === painelId);
+    if (!p) {
+        showToast('❌ Painel não encontrado', 'error');
+        return;
+    }
+
+    // Optimistic update no cache + modal — Realtime confirmará
+    const prevState = p.estado_atual;
+    const prevMessage = p.mensagem_atual;
+    p.estado_atual = newState;
+    p.mensagem_atual = newMessage;
+    p.atualizado_em = new Date().toISOString();
+    _refreshPainelDetailFromCache();
+    renderPaineisGrid();
+
+    try {
+        const { error: upErr } = await db
+            .from('paineis_andon')
+            .update({ estado_atual: newState, mensagem_atual: newMessage })
+            .eq('id', painelId);
+        if (upErr) throw upErr;
+
+        // Histórico — se falhar, não rollback. É auditoria, não critico.
+        const { error: hisErr } = await db
+            .from('paineis_andon_historico')
+            .insert({
+                painel_id: painelId,
+                estado_anterior: prevState,
+                estado_novo: newState,
+                mensagem: newMessage,
+                alterado_por: currentUser?.email || currentUser?.nome || 'desconhecido'
+            });
+        if (hisErr) console.warn('⚠️ Histórico não gravado (não bloqueante):', hisErr);
+
+        showToast(`✅ ${p.nome}: ${newState.toUpperCase()} "${newMessage}"`, 'success');
+    } catch (err) {
+        // Rollback optimistic update
+        p.estado_atual = prevState;
+        p.mensagem_atual = prevMessage;
+        _refreshPainelDetailFromCache();
+        renderPaineisGrid();
+        console.error('❌ Erro a aplicar mudança:', err);
+        showToast(`❌ Erro: ${err.message}`, 'error');
+    }
+}
+
+function pingPainel() {
+    if (!_selectedPainelId) return;
+    showToast('📡 Ping ainda não disponível — bridge daemon chega no v2.52.53. A BD foi actualizada na mesma; o painel físico só receberá quando o bridge estiver instalado no Raspberry Pi.', 'info');
 }
 
 // 🔥 v2.51.36i: Garantir que auto-refresh inicia
