@@ -9532,10 +9532,7 @@ function setupPaineisRealtime() {
                             _painelEnsureDraft();
                             _refreshPainelDetailFromCache();
                         }
-                        // Histórico actualiza sempre
-                        if (typeof _loadPainelHistorico === 'function') {
-                            _loadPainelHistorico(_selectedPainelId);
-                        }
+                        // 🆕 v2.52.55: histórico UI foi removido; tabela continua a registar
                     }
                 });
             }
@@ -9603,15 +9600,52 @@ function openPainelDetail(painelId) {
     _refreshPainelDetailFromCache();
     document.getElementById('modal-painel-detail').classList.add('active');
 
-    // Presets + histórico em paralelo
-    renderPainelPresetsRow();
-    _loadPainelHistorico(painelId);
+    // 🆕 v2.52.55: popular datalist com presets aplicáveis a esta fábrica
+    _renderZonePresetDatalist();
 
     // 🆕 v2.52.54-F: auto-focus na mensagem da zona 1 para edição rápida
     setTimeout(() => {
         const first = document.getElementById('zone-msg-0');
         if (first) { first.focus(); first.select(); }
     }, 80);
+}
+
+// 🆕 v2.52.55: popula <datalist> com presets aplicáveis à fábrica do painel
+function _renderZonePresetDatalist() {
+    const p = paineisData.find(x => x.id === _selectedPainelId);
+    if (!p) return;
+    const datalist = document.getElementById('painel-zone-presets-datalist');
+    if (!datalist) return;
+
+    const applicable = paineisPresetsData.filter(pr => !pr.fabrica || pr.fabrica === p.fabrica);
+    if (applicable.length === 0) {
+        datalist.innerHTML = '';
+        return;
+    }
+    datalist.innerHTML = applicable.map(pr => {
+        const emoji = { verde: '🟢', amarelo: '🟡', vermelho: '🔴' }[pr.estado] || '';
+        // value = o que aparece na caixa; label = o que se vê no dropdown (Chrome mostra ambos)
+        return `<option value="${_paineisEscape(pr.mensagem)}">${emoji} ${_paineisEscape(pr.nome)}</option>`;
+    }).join('');
+}
+
+// 🆕 v2.52.55: change event do input — se o valor escrito/escolhido bate certo
+// com a mensagem de algum preset, aplica também o estado desse preset.
+function draftZoneMessageChange(zoneIdx, newValue) {
+    const d = _painelEnsureDraft();
+    if (!d || zoneIdx < 0 || zoneIdx >= d.layout) return;
+    d.zonas[zoneIdx].mensagem = newValue;
+
+    // Match exacto? primeira ocorrência ganha
+    const matched = paineisPresetsData.find(pr => pr.mensagem === newValue
+        && (!pr.fabrica || pr.fabrica === paineisData.find(p => p.id === _selectedPainelId)?.fabrica));
+    if (matched) {
+        d.zonas[zoneIdx].estado = matched.estado;
+        _refreshPainelDetailFromCache();
+    } else {
+        _painelUpdatePreviewOnly();
+        _painelUpdateDraftActionBar();
+    }
 }
 
 function closePainelDetail() {
@@ -9665,7 +9699,6 @@ function _refreshPainelDetailFromCache() {
     // 🆕 v2.52.54: action bar + multi-zona helpers visibility
     _painelUpdateDraftActionBar();
     document.getElementById('painel-apply-all-row').style.display = (layout > 1) ? 'block' : 'none';
-    _updatePresetTargetSelector(layout);
 
     const meta = document.getElementById('painel-detail-meta');
     const updateStr = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
@@ -9722,8 +9755,10 @@ function _renderZoneEditors(layout, zonas) {
             <div style="display:flex;gap:6px;margin-bottom:6px;">
                 ${stateButtonsHtml}
             </div>
-            <input type="text" id="zone-msg-${idx}" value="${_paineisEscape(z.mensagem || '')}" placeholder="Mensagem zona ${idx+1}" maxlength="20"
+            <input type="text" id="zone-msg-${idx}" value="${_paineisEscape(z.mensagem || '')}" placeholder="Escrever ou escolher preset ▾" maxlength="20"
+                list="painel-zone-presets-datalist"
                 oninput="draftZoneMessageInput(${idx}, this.value)"
+                onchange="draftZoneMessageChange(${idx}, this.value)"
                 onkeydown="_onZoneMessageKeydown(event, ${idx})"
                 style="width:100%;padding:8px 10px;border:1px solid #D1D1D6;border-radius:6px;font-size:13px;box-sizing:border-box;" />
         </div>`;

@@ -2674,28 +2674,10 @@
                         <button type="button" class="btn-primary" id="painel-save-btn" onclick="savePainelDraft()" style="padding:8px 14px;font-size:13px;" disabled>💾 Guardar</button>
                     </div>
 
-                    <!-- Presets rápidos -->
-                    <div style="margin-bottom:14px;">
-                        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">⚡ Presets:</label>
-                        <!-- 🆕 v2.52.54: target zone selector (visível só em multi-zona) -->
-                        <div id="painel-preset-target-row" style="display:none;margin-bottom:6px;font-size:11px;">
-                            <span style="color:#666;margin-right:4px;">Aplicar a:</span>
-                            <select id="painel-preset-target" style="padding:3px 6px;border:1px solid #D1D1D6;border-radius:4px;font-size:11px;">
-                                <!-- Opções injectadas em _renderZoneEditors -->
-                            </select>
-                        </div>
-                        <div id="painel-presets-row" style="display:flex;flex-wrap:wrap;gap:6px;">
-                            <small style="color:#999;font-size:11px;">A carregar...</small>
-                        </div>
-                    </div>
-
-                    <!-- 🆕 v2.52.52: Histórico recente -->
-                    <details style="margin-top:14px;border-top:1px solid #E5E5EA;padding-top:14px;">
-                        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#555;user-select:none;">📜 Histórico recente</summary>
-                        <div id="painel-detail-historico" style="margin-top:10px;font-size:12px;color:#555;max-height:200px;overflow-y:auto;background:#fafafa;padding:8px 12px;border-radius:6px;">
-                            <p style="color:#999;">⏳ A carregar...</p>
-                        </div>
-                    </details>
+                    <!-- 🆕 v2.52.55: datalist partilhado pelos inputs das zonas — presets como autocomplete -->
+                    <datalist id="painel-zone-presets-datalist">
+                        <!-- Opções injectadas dinamicamente quando o modal abre -->
+                    </datalist>
 
                     <div style="display:flex;gap:8px;border-top:1px solid #E5E5EA;padding-top:14px;margin-top:14px;flex-wrap:wrap;">
                         <button type="button" class="btn-secondary" onclick="pingPainel()" style="flex:1;min-width:120px;padding:10px;">📡 Testar conectividade</button>
