@@ -785,6 +785,12 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
                 renderResumoCargas();
             });
         }
+
+        // 🆕 v2.52.50: Auto-init da tab Painéis (carrega + Realtime na primeira abertura)
+        if (tabName === 'paineis') {
+            console.log('🏭 Aba Organização Pavilhões aberta');
+            initPaineisIfNeeded();
+        }
         
         if (tabName === 'calendario') {
             console.log('📅 Aba Mapa Cargas aberta - carregando dados...');
@@ -9327,6 +9333,157 @@ function executePrintCargas() {
 
     closePrintCargasModal();
     showToast('🖨️ Janela de impressão aberta', 'info');
+}
+
+// ===================================================================
+// 🆕 v2.52.50: Módulo "Organização Pavilhões" (paineis_andon)
+// ===================================================================
+// - loadPaineis(): SELECT * FROM paineis_andon, guarda em paineisData
+// - renderPaineisGrid(): pinta cards a partir de paineisData + filtro fábrica
+// - setupPaineisRealtime(): subscreve postgres_changes e re-renderiza
+// - initPaineisIfNeeded(): chamado no clique da tab. Idempotente.
+//
+// Este commit é SOMENTE LEITURA. Não escreve, não apaga, não muda estado
+// dos painéis na BD. O detalhe interactivo chega no commit v2.52.51.
+// ===================================================================
+
+let paineisData = [];
+let paineisRealtimeChannel = null;
+let paineisInitialized = false;
+
+async function initPaineisIfNeeded() {
+    if (paineisInitialized) {
+        // Apenas re-render para refletir filtro / dados em cache
+        renderPaineisGrid();
+        return;
+    }
+    paineisInitialized = true;
+
+    // Hook do filtro de fábrica
+    const filter = document.getElementById('paineis-fabrica-filter');
+    if (filter) {
+        filter.addEventListener('change', () => renderPaineisGrid());
+    }
+
+    await loadPaineis();
+    setupPaineisRealtime();
+}
+
+async function loadPaineis() {
+    const grid = document.getElementById('paineis-grid');
+    if (grid) grid.innerHTML = '<p style="grid-column:1/-1;color:#999;text-align:center;padding:40px;">⏳ A carregar painéis...</p>';
+
+    try {
+        const { data, error } = await db
+            .from('paineis_andon')
+            .select('*')
+            .order('id', { ascending: true });
+        if (error) throw error;
+        paineisData = data || [];
+        console.log(`🏭 Carregados ${paineisData.length} paineis da BD`);
+        renderPaineisGrid();
+    } catch (err) {
+        console.error('❌ Erro a carregar paineis:', err);
+        if (grid) grid.innerHTML = `<p style="grid-column:1/-1;color:#FF3B30;text-align:center;padding:40px;">❌ Erro: ${err.message}<br><span style="font-size:12px;color:#999;">Já correste o CRIAR_TABELA_PAINEIS_ANDON.sql no Supabase?</span></p>`;
+    }
+}
+
+function renderPaineisGrid() {
+    const grid = document.getElementById('paineis-grid');
+    if (!grid) return;
+
+    const filterVal = document.getElementById('paineis-fabrica-filter')?.value || 'todas';
+    const filtered = (filterVal === 'todas')
+        ? paineisData
+        : paineisData.filter(p => p.fabrica === filterVal);
+
+    if (filtered.length === 0) {
+        const msg = (filterVal === 'todas')
+            ? 'Sem painéis configurados. Corre o <code>CRIAR_TABELA_PAINEIS_ANDON.sql</code> no Supabase.'
+            : `Sem painéis na fábrica ${filterVal}.`;
+        grid.innerHTML = `<p style="grid-column:1/-1;color:#999;text-align:center;padding:40px;">${msg}</p>`;
+        return;
+    }
+
+    grid.innerHTML = filtered.map(renderPaineisCard).join('');
+}
+
+function renderPaineisCard(p) {
+    const stateColors = {
+        verde:    { bg: '#34C759', fg: '#fff' },
+        amarelo:  { bg: '#FF9500', fg: '#1d1d1f' },
+        vermelho: { bg: '#FF3B30', fg: '#fff' },
+    };
+    const sc = stateColors[p.estado_atual] || { bg: '#999', fg: '#fff' };
+    const bg = p.cor_fundo || sc.bg;
+    const fg = p.cor_texto || sc.fg;
+
+    const onlineBadge = p.online
+        ? '<span style="background:rgba(0,0,0,0.18);color:inherit;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;">🟢 ONLINE</span>'
+        : '<span style="background:rgba(0,0,0,0.45);color:#fff;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;">⚫ OFFLINE</span>';
+
+    const lastUpdated = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
+
+    return `
+        <div class="painel-card" data-painel-id="${_paineisEscape(p.id)}" style="
+            position: relative;
+            background: ${bg};
+            color: ${fg};
+            border-radius: 12px;
+            padding: 14px 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+            cursor: pointer;
+            opacity: ${p.online ? 1 : 0.7};
+            min-height: 140px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: transform 0.15s ease;
+            border: ${p.ativo ? 'none' : '2px dashed rgba(0,0,0,0.3)'};
+        " onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                <div style="font-size: 12px; font-weight: 700; opacity: 0.9;">${_paineisEscape(p.nome)}</div>
+                ${onlineBadge}
+            </div>
+            <div style="font-size: 26px; font-weight: 800; line-height: 1.15; margin: 8px 0; word-break: break-word; text-align:center;">
+                ${_paineisEscape(p.mensagem_atual || '—')}
+            </div>
+            <div style="font-size: 11px; opacity: 0.88; display: flex; justify-content: space-between; gap: 8px;">
+                <span title="${_paineisEscape(p.localizacao || '')}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%;">📍 ${_paineisEscape(p.localizacao || '—')}</span>
+                <span>${lastUpdated}</span>
+            </div>
+        </div>
+    `;
+}
+
+function _paineisFormatRelative(d) {
+    const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    if (seconds < 60) return 'agora mesmo';
+    if (seconds < 3600) return `há ${Math.floor(seconds / 60)} min`;
+    if (seconds < 86400) return `há ${Math.floor(seconds / 3600)} h`;
+    return d.toLocaleDateString('pt-PT');
+}
+
+function _paineisEscape(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function setupPaineisRealtime() {
+    if (paineisRealtimeChannel) return;
+    paineisRealtimeChannel = db
+        .channel('paineis-andon-changes')
+        .on('postgres_changes',
+            { event: '*', schema: 'public', table: 'paineis_andon' },
+            (payload) => {
+                console.log(`🏭 Realtime paineis_andon: ${payload.eventType} ${payload.new?.id || payload.old?.id || ''}`);
+                // Re-load completo é mais simples e os volumes são pequenos (~10-30 paineis)
+                loadPaineis();
+            }
+        )
+        .subscribe((status) => {
+            console.log(`🏭 Realtime paineis subscribe status: ${status}`);
+        });
 }
 
 // 🔥 v2.51.36i: Garantir que auto-refresh inicia
