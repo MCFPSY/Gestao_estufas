@@ -2395,6 +2395,10 @@
             <button class="tab-btn" data-tab="cargas-resumo">
                 📦 Cargas Resumo
             </button>
+            <!-- 🆕 v2.52.49: tab restrita por allowlist em app.js (PAINEIS_USERS) -->
+            <button class="tab-btn" data-tab="paineis" id="tab-btn-paineis" style="display:none;">
+                🏭 Organização Pavilhões
+            </button>
         </div>
         
         <!-- Tab 1: Planeamento -->
@@ -2589,9 +2593,35 @@
             </div>
         </div>
         
+        <!-- 🆕 v2.52.49: Tab Organização Pavilhões (visível só para allowlist em app.js) -->
+        <div id="tab-paineis" class="tab-content">
+            <div style="padding: 24px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+                    <div>
+                        <h2 style="margin:0;">🏭 Organização Pavilhões</h2>
+                        <p style="margin:4px 0 0 0;font-size:13px;color:#666;">Painéis LED de sinalização visual nas fábricas</p>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <select id="paineis-fabrica-filter" style="padding:8px 12px;border-radius:8px;border:1px solid #D1D1D6;font-size:14px;">
+                            <option value="todas">Todas as fábricas</option>
+                            <option value="PSY" selected>PSY</option>
+                            <option value="MCF">MCF</option>
+                        </select>
+                        <button class="btn-primary" id="btn-add-painel" style="padding:8px 14px;" disabled title="Disponível no próximo commit">➕ Adicionar painel</button>
+                    </div>
+                </div>
+                <div id="paineis-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">
+                    <p style="grid-column:1/-1;color:#999;text-align:center;padding:40px;">
+                        ⏳ A grelha de painéis chega no próximo commit (<strong>v2.52.50</strong>).<br>
+                        <span style="font-size:12px;">Esquema SQL e tab UI já estão em produção; <code>CRIAR_TABELA_PAINEIS_ANDON.sql</code> precisa de ser corrido no Supabase antes do próximo deploy.</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+
         <!-- Tab 5: Utilizadores -->
     </div>
-    
+
     <!-- Modal Secagem -->
     <div class="modal" id="modal-secagem">
         <div class="modal-dialog">

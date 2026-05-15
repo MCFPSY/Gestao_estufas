@@ -510,10 +510,25 @@ function showApp() {
     }
 }
 
+// 🆕 v2.52.49: Allowlist de utilizadores que veem a tab "Organização Pavilhões".
+// Beta restrito enquanto a feature está em construção e o bridge não está deployed.
+// Para libertar a toda a gente: substituir o array por uma permission no sistema canEdit.
+const PAINEIS_USERS = ['goncalo'];
+
+function applyPaineisVisibility() {
+    const username = (currentUser?.email || '').split('@')[0].toLowerCase();
+    const btn = document.getElementById('tab-btn-paineis');
+    const content = document.getElementById('tab-paineis');
+    const allowed = PAINEIS_USERS.includes(username);
+    if (btn) btn.style.display = allowed ? '' : 'none';
+    if (content && !allowed) content.style.display = 'none';
+    console.log(`🏭 Tab "Organização Pavilhões": ${allowed ? 'VISÍVEL' : 'oculta'} para ${username || '(sem user)'}`);
+}
+
 // 🔐 v2.52.0: Aplicar permissões na UI
 function applyPermissions() {
     console.log('🔐 Aplicando permissões na UI...');
-    
+
     // Mapear tabs para elementos
     const tabs = {
         'planeamento': { btn: document.querySelector('[data-tab="planeamento"]'), content: document.getElementById('tab-planeamento') },
@@ -522,6 +537,9 @@ function applyPermissions() {
         'cargas': { btn: document.querySelector('[data-tab="cargas"]'), content: document.getElementById('tab-cargas') },
         'cargas_resumo': { btn: document.querySelector('[data-tab="cargas_resumo"]'), content: document.getElementById('tab-cargas-resumo') }
     };
+
+    // 🆕 v2.52.49: visibilidade da tab Painéis por allowlist
+    applyPaineisVisibility();
     
     // Aplicar permissões em cada tab
     Object.keys(tabs).forEach(tabId => {
