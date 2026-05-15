@@ -513,7 +513,8 @@ function showApp() {
 // 🆕 v2.52.49: Allowlist de utilizadores que veem a tab "Organização Pavilhões".
 // Beta restrito enquanto a feature está em construção e o bridge não está deployed.
 // Para libertar a toda a gente: substituir o array por uma permission no sistema canEdit.
-const PAINEIS_USERS = ['goncalo'];
+// 🆕 v2.52.52a: +zemaria.
+const PAINEIS_USERS = ['goncalo', 'zemaria'];
 
 function applyPaineisVisibility() {
     const username = (currentUser?.email || '').split('@')[0].toLowerCase();
