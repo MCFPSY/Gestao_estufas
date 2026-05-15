@@ -9409,49 +9409,81 @@ function renderPaineisGrid() {
     grid.innerHTML = filtered.map(renderPaineisCard).join('');
 }
 
-function renderPaineisCard(p) {
-    const stateColors = {
-        verde:    { bg: '#34C759', fg: '#fff' },
-        amarelo:  { bg: '#FF9500', fg: '#1d1d1f' },
-        vermelho: { bg: '#FF3B30', fg: '#fff' },
+// 🆕 v2.52.53: Mapa de cores por estado. Sem cor_fundo/cor_texto por zona (próxima iteração).
+const _PAINEIS_STATE_COLORS = {
+    verde:    { bg: '#34C759', fg: '#fff' },
+    amarelo:  { bg: '#FF9500', fg: '#1d1d1f' },
+    vermelho: { bg: '#FF3B30', fg: '#fff' },
+};
+
+// 🆕 v2.52.53: getZonas — abstrai schema. Lê novas colunas (layout/zonas) mas faz
+// fallback para o schema antigo (estado_atual/mensagem_atual) durante a janela
+// de transição em que o SQL ALTER ainda não correu.
+function _paineisGetLayoutZonas(p) {
+    if (Array.isArray(p?.zonas) && p.zonas.length > 0) {
+        const layout = Math.max(1, Math.min(3, p.layout || p.zonas.length));
+        // Normaliza: garante que tem exactamente "layout" entradas
+        const zonas = [];
+        for (let i = 0; i < layout; i++) {
+            const z = p.zonas[i] || { estado: 'verde', mensagem: 'OK' };
+            zonas.push({
+                estado: z.estado || 'verde',
+                mensagem: z.mensagem || ''
+            });
+        }
+        return { layout, zonas };
+    }
+    // Fallback legacy
+    return {
+        layout: 1,
+        zonas: [{ estado: p?.estado_atual || 'verde', mensagem: p?.mensagem_atual || 'OK' }]
     };
-    const sc = stateColors[p.estado_atual] || { bg: '#999', fg: '#fff' };
-    const bg = p.cor_fundo || sc.bg;
-    const fg = p.cor_texto || sc.fg;
+}
+
+function renderPaineisCard(p) {
+    const { layout, zonas } = _paineisGetLayoutZonas(p);
 
     const onlineBadge = p.online
-        ? '<span style="background:rgba(0,0,0,0.18);color:inherit;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;">🟢 ONLINE</span>'
-        : '<span style="background:rgba(0,0,0,0.45);color:#fff;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;">⚫ OFFLINE</span>';
+        ? '<span style="background:rgba(255,255,255,0.6);color:#000;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;">🟢 ONLINE</span>'
+        : '<span style="background:rgba(0,0,0,0.55);color:#fff;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;">⚫ OFFLINE</span>';
 
     const lastUpdated = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
+
+    // Render dos blocos de zona (1, 2 ou 3 colunas que espelham o painel físico)
+    const zonesHtml = zonas.map((z, i) => {
+        const sc = _PAINEIS_STATE_COLORS[z.estado] || { bg: '#999', fg: '#fff' };
+        const msg = _paineisEscape(z.mensagem || '—');
+        // Tamanho de fonte adapta-se ao número de zonas (mais zonas = letra menor)
+        const fontSize = layout === 1 ? '26px' : layout === 2 ? '20px' : '16px';
+        return `<div style="flex:1;background:${sc.bg};color:${sc.fg};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:${fontSize};line-height:1.1;padding:6px;text-align:center;word-break:break-word;min-width:0;">${msg}</div>`;
+    }).join('');
 
     return `
         <div class="painel-card" data-painel-id="${_paineisEscape(p.id)}"
             onclick="openPainelDetail('${_paineisEscape(p.id)}')"
             style="
             position: relative;
-            background: ${bg};
-            color: ${fg};
+            background: #fff;
+            color: #1d1d1f;
             border-radius: 12px;
-            padding: 14px 16px;
+            overflow: hidden;
             box-shadow: 0 2px 8px rgba(0,0,0,0.12);
             cursor: pointer;
-            opacity: ${p.online ? 1 : 0.7};
+            opacity: ${p.online ? 1 : 0.75};
             min-height: 140px;
             display: flex;
             flex-direction: column;
-            justify-content: space-between;
             transition: transform 0.15s ease;
-            border: ${p.ativo ? 'none' : '2px dashed rgba(0,0,0,0.3)'};
+            border: ${p.ativo ? '1px solid #E5E5EA' : '2px dashed rgba(0,0,0,0.3)'};
         " onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-                <div style="font-size: 12px; font-weight: 700; opacity: 0.9;">${_paineisEscape(p.nome)}</div>
+            <div style="padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;background:#fafafa;border-bottom:1px solid #eee;">
+                <div style="font-size: 12px; font-weight: 700;">${_paineisEscape(p.nome)}</div>
                 ${onlineBadge}
             </div>
-            <div style="font-size: 26px; font-weight: 800; line-height: 1.15; margin: 8px 0; word-break: break-word; text-align:center;">
-                ${_paineisEscape(p.mensagem_atual || '—')}
+            <div style="display:flex;flex:1;gap:0;min-height:64px;">
+                ${zonesHtml}
             </div>
-            <div style="font-size: 11px; opacity: 0.88; display: flex; justify-content: space-between; gap: 8px;">
+            <div style="padding:6px 12px;font-size:11px;color:#666;display:flex;justify-content:space-between;gap:8px;background:#fafafa;border-top:1px solid #eee;">
                 <span title="${_paineisEscape(p.localizacao || '')}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%;">📍 ${_paineisEscape(p.localizacao || '—')}</span>
                 <span>${lastUpdated}</span>
             </div>
@@ -9530,6 +9562,7 @@ function closePainelDetail() {
 function _refreshPainelDetailFromCache() {
     const p = paineisData.find(x => x.id === _selectedPainelId);
     if (!p) return;
+    const { layout, zonas } = _paineisGetLayoutZonas(p);
 
     document.getElementById('painel-detail-title').textContent = `🏭 ${p.nome}`;
     document.getElementById('painel-detail-subtitle').textContent = `Fábrica ${p.fabrica} · ${p.localizacao || 'sem localização'}`;
@@ -9537,14 +9570,25 @@ function _refreshPainelDetailFromCache() {
     document.getElementById('painel-detail-fabrica').textContent = p.fabrica;
     document.getElementById('painel-detail-localizacao').textContent = p.localizacao || '—';
     document.getElementById('painel-detail-ip').textContent = p.ip_local;
-    document.getElementById('painel-detail-message').textContent = p.mensagem_atual || '—';
 
-    const pill = document.getElementById('painel-detail-state-pill');
-    const stateColors = { verde: '#34C759', amarelo: '#FF9500', vermelho: '#FF3B30' };
-    const stateLabels = { verde: '🟢 Verde', amarelo: '🟡 Amarelo', vermelho: '🔴 Vermelho' };
-    pill.textContent = stateLabels[p.estado_atual] || p.estado_atual;
-    pill.style.background = stateColors[p.estado_atual] || '#999';
-    pill.style.color = (p.estado_atual === 'amarelo') ? '#1d1d1f' : '#fff';
+    // 🆕 v2.52.53: preview visual das zonas no header
+    const preview = document.getElementById('painel-detail-zones-preview');
+    preview.innerHTML = zonas.map(z => {
+        const sc = _PAINEIS_STATE_COLORS[z.estado] || { bg: '#999', fg: '#fff' };
+        return `<div style="flex:1;background:${sc.bg};color:${sc.fg};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;">${_paineisEscape(z.mensagem || '—')}</div>`;
+    }).join('');
+
+    // 🆕 v2.52.53: marcar layout activo nos botões
+    document.querySelectorAll('#painel-layout-selector button').forEach(btn => {
+        const isActive = parseInt(btn.dataset.layout, 10) === layout;
+        btn.style.background = isActive ? '#FF9500' : '#F5F5F7';
+        btn.style.color = isActive ? '#fff' : '#1d1d1f';
+        btn.style.borderColor = isActive ? '#FF9500' : 'transparent';
+        btn.style.fontWeight = isActive ? '700' : '400';
+    });
+
+    // 🆕 v2.52.53: editores de zona dinâmicos
+    _renderZoneEditors(layout, zonas);
 
     const meta = document.getElementById('painel-detail-meta');
     const updateStr = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
@@ -9552,40 +9596,92 @@ function _refreshPainelDetailFromCache() {
     meta.textContent = `Última actualização: ${updateStr} · ${onlineStr}`;
 }
 
-async function quickApplyState(state) {
-    if (!_selectedPainelId) return;
-    const defaultMessages = { verde: 'OK', amarelo: 'ATENÇÃO', vermelho: 'AVARIA' };
-    const msg = defaultMessages[state] || 'OK';
-    await _applyPanelChange(_selectedPainelId, state, msg);
+// 🆕 v2.52.53: gera editores de zona dentro de #painel-zones-editors
+function _renderZoneEditors(layout, zonas) {
+    const container = document.getElementById('painel-zones-editors');
+    if (!container) return;
+    const STATES = ['verde', 'amarelo', 'vermelho'];
+    const stateEmoji = { verde: '🟢', amarelo: '🟡', vermelho: '🔴' };
+
+    container.innerHTML = zonas.map((z, idx) => {
+        const sc = _PAINEIS_STATE_COLORS[z.estado] || { bg: '#999', fg: '#fff' };
+        const stateButtonsHtml = STATES.map(s => {
+            const bgC = _PAINEIS_STATE_COLORS[s].bg;
+            const isActive = z.estado === s;
+            return `<button type="button" onclick="applyZoneState(${idx}, '${s}')"
+                style="flex:1;background:${bgC};color:${s==='amarelo'?'#1d1d1f':'#fff'};border:${isActive?'3px solid #1d1d1f':'1px solid transparent'};padding:8px 4px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
+                ${stateEmoji[s]}
+            </button>`;
+        }).join('');
+
+        return `<div style="background:#fafafa;border:1px solid #E5E5EA;border-radius:8px;padding:10px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <span style="font-size:12px;font-weight:700;">Zona ${idx + 1}</span>
+                <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${sc.bg};border:1px solid #999;"></span>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:6px;">
+                ${stateButtonsHtml}
+            </div>
+            <div style="display:flex;gap:6px;">
+                <input type="text" id="zone-msg-${idx}" value="${_paineisEscape(z.mensagem || '')}" placeholder="Mensagem zona ${idx+1}" maxlength="20" style="flex:1;padding:8px 10px;border:1px solid #D1D1D6;border-radius:6px;font-size:13px;box-sizing:border-box;" />
+                <button type="button" class="btn-primary" onclick="applyZoneMessage(${idx})" style="padding:8px 12px;font-size:12px;white-space:nowrap;">Aplicar</button>
+            </div>
+        </div>`;
+    }).join('');
 }
 
-async function applyCustomMessage() {
+// 🆕 v2.52.53: muda layout (1/2/3 zonas). Preserva zonas existentes, completa
+// com defaults se aumenta; trunca se diminui.
+async function changePainelLayout(newLayout) {
     if (!_selectedPainelId) return;
-    const input = document.getElementById('painel-custom-message');
-    const msg = (input.value || '').trim();
-    if (!msg) {
-        showToast('⚠️ Escreve uma mensagem primeiro', 'error');
-        input.focus();
-        return;
-    }
+    if (![1, 2, 3].includes(newLayout)) return;
     const p = paineisData.find(x => x.id === _selectedPainelId);
     if (!p) return;
-    await _applyPanelChange(_selectedPainelId, p.estado_atual, msg);
-    input.value = '';
+    const { zonas: oldZonas } = _paineisGetLayoutZonas(p);
+    const newZonas = [];
+    for (let i = 0; i < newLayout; i++) {
+        newZonas.push(oldZonas[i] || { estado: 'verde', mensagem: 'OK' });
+    }
+    await _applyPanelChange(_selectedPainelId, newLayout, newZonas);
 }
 
-async function _applyPanelChange(painelId, newState, newMessage) {
+// 🆕 v2.52.53: muda apenas o estado de UMA zona, mantém mensagem
+async function applyZoneState(zoneIdx, newState) {
+    if (!_selectedPainelId) return;
+    const p = paineisData.find(x => x.id === _selectedPainelId);
+    if (!p) return;
+    const { layout, zonas } = _paineisGetLayoutZonas(p);
+    if (zoneIdx < 0 || zoneIdx >= layout) return;
+    const newZonas = zonas.map((z, i) => i === zoneIdx ? { ...z, estado: newState } : z);
+    await _applyPanelChange(_selectedPainelId, layout, newZonas);
+}
+
+// 🆕 v2.52.53: muda apenas a mensagem de UMA zona, mantém estado
+async function applyZoneMessage(zoneIdx) {
+    if (!_selectedPainelId) return;
+    const input = document.getElementById(`zone-msg-${zoneIdx}`);
+    if (!input) return;
+    const msg = (input.value || '').trim();
+    const p = paineisData.find(x => x.id === _selectedPainelId);
+    if (!p) return;
+    const { layout, zonas } = _paineisGetLayoutZonas(p);
+    if (zoneIdx < 0 || zoneIdx >= layout) return;
+    const newZonas = zonas.map((z, i) => i === zoneIdx ? { ...z, mensagem: msg } : z);
+    await _applyPanelChange(_selectedPainelId, layout, newZonas);
+}
+
+// 🆕 v2.52.53: central — aplica layout + zonas inteiros à BD com optimistic UI
+async function _applyPanelChange(painelId, newLayout, newZonas) {
     const p = paineisData.find(x => x.id === painelId);
     if (!p) {
         showToast('❌ Painel não encontrado', 'error');
         return;
     }
+    const { layout: prevLayout, zonas: prevZonas } = _paineisGetLayoutZonas(p);
 
-    // Optimistic update no cache + modal — Realtime confirmará
-    const prevState = p.estado_atual;
-    const prevMessage = p.mensagem_atual;
-    p.estado_atual = newState;
-    p.mensagem_atual = newMessage;
+    // Optimistic update
+    p.layout = newLayout;
+    p.zonas = newZonas;
     p.atualizado_em = new Date().toISOString();
     _refreshPainelDetailFromCache();
     renderPaineisGrid();
@@ -9593,27 +9689,33 @@ async function _applyPanelChange(painelId, newState, newMessage) {
     try {
         const { error: upErr } = await db
             .from('paineis_andon')
-            .update({ estado_atual: newState, mensagem_atual: newMessage })
+            .update({ layout: newLayout, zonas: newZonas })
             .eq('id', painelId);
         if (upErr) throw upErr;
 
-        // Histórico — se falhar, não rollback. É auditoria, não critico.
+        // Histórico (não bloqueante)
         const { error: hisErr } = await db
             .from('paineis_andon_historico')
             .insert({
                 painel_id: painelId,
-                estado_anterior: prevState,
-                estado_novo: newState,
-                mensagem: newMessage,
-                alterado_por: currentUser?.email || currentUser?.nome || 'desconhecido'
+                layout_anterior: prevLayout,
+                layout_novo: newLayout,
+                zonas_anteriores: prevZonas,
+                zonas_novas: newZonas,
+                alterado_por: currentUser?.email || currentUser?.nome || 'desconhecido',
+                // Legacy fields (para compatibilidade com queries antigas)
+                estado_anterior: prevZonas[0]?.estado || null,
+                estado_novo: newZonas[0]?.estado || null,
+                mensagem: newZonas.map(z => z.mensagem).join(' | ')
             });
-        if (hisErr) console.warn('⚠️ Histórico não gravado (não bloqueante):', hisErr);
+        if (hisErr) console.warn('⚠️ Histórico não gravado:', hisErr);
 
-        showToast(`✅ ${p.nome}: ${newState.toUpperCase()} "${newMessage}"`, 'success');
+        const summary = newZonas.map(z => `${z.estado}/${z.mensagem || '—'}`).join(' · ');
+        showToast(`✅ ${p.nome}: ${summary}`, 'success');
     } catch (err) {
-        // Rollback optimistic update
-        p.estado_atual = prevState;
-        p.mensagem_atual = prevMessage;
+        // Rollback
+        p.layout = prevLayout;
+        p.zonas = prevZonas;
         _refreshPainelDetailFromCache();
         renderPaineisGrid();
         console.error('❌ Erro a aplicar mudança:', err);
@@ -9680,7 +9782,15 @@ async function applyPreset(presetId) {
         showToast('❌ Preset não encontrado', 'error');
         return;
     }
-    await _applyPanelChange(_selectedPainelId, pr.estado, pr.mensagem);
+    // 🆕 v2.52.53: preset aplica como 1 zona única ao painel. Multi-zona é manual.
+    // Se o preset já tem zonas (futuro), respeita; caso contrário usa estado/mensagem legacy.
+    let newLayout = 1;
+    let newZonas = [{ estado: pr.estado, mensagem: pr.mensagem }];
+    if (Array.isArray(pr.zonas) && pr.zonas.length > 0) {
+        newLayout = Math.max(1, Math.min(3, pr.layout || pr.zonas.length));
+        newZonas = pr.zonas.slice(0, newLayout);
+    }
+    await _applyPanelChange(_selectedPainelId, newLayout, newZonas);
 }
 
 // --- Histórico ---
@@ -9705,12 +9815,18 @@ async function _loadPainelHistorico(painelId) {
         container.innerHTML = data.map(h => {
             const dt = new Date(h.criado_em);
             const dtStr = dt.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-            const prevE = stateEmoji[h.estado_anterior] || '◽';
-            const newE = stateEmoji[h.estado_novo] || '◽';
             const who = (h.alterado_por || 'desconhecido').split('@')[0];
+            // 🆕 v2.52.53: prioriza zonas_novas; fallback para estado_novo/mensagem legacy
+            let summary;
+            if (Array.isArray(h.zonas_novas) && h.zonas_novas.length > 0) {
+                summary = h.zonas_novas.map(z => `${stateEmoji[z.estado] || '◽'} ${_paineisEscape(z.mensagem || '—')}`).join(' · ');
+            } else {
+                const e = stateEmoji[h.estado_novo] || '◽';
+                summary = `${e} ${_paineisEscape(h.mensagem || '—')}`;
+            }
             return `<div style="padding:6px 0;border-bottom:1px solid #eee;">
                 <div style="display:flex;justify-content:space-between;gap:8px;">
-                    <span><span style="color:#999;">${dtStr}</span> ${prevE} → ${newE} <strong>${_paineisEscape(h.mensagem || '—')}</strong></span>
+                    <span><span style="color:#999;">${dtStr}</span> ${summary}</span>
                     <span style="color:#999;font-size:10px;white-space:nowrap;">por ${_paineisEscape(who)}</span>
                 </div>
             </div>`;
@@ -9794,7 +9910,11 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const { error } = await db.from('paineis_andon').insert({
                     id, nome, fabrica, localizacao, ip_local, ativo,
-                    estado_atual: 'verde', mensagem_atual: 'OK'
+                    // Legacy compat
+                    estado_atual: 'verde', mensagem_atual: 'OK',
+                    // 🆕 v2.52.53: novo schema
+                    layout: 1,
+                    zonas: [{ estado: 'verde', mensagem: 'OK' }]
                 });
                 if (error) throw error;
                 showToast(`✅ Painel "${nome}" criado`, 'success');
