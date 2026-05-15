@@ -8843,6 +8843,9 @@ window.addEventListener('resize', forceZoomReset);
 // 🖨️ IMPRIMIR CARGAS DO DIA (v2.52.0)
 // ===================================================================
 
+// 🆕 v2.52.48: Modo de impressão (dia ou semana). Default: 'day' para manter comportamento histórico.
+let _printCargasMode = 'day';
+
 function openPrintCargasModal() {
     const modal = document.getElementById('modal-print-cargas');
     if (!modal) return;
@@ -8856,8 +8859,52 @@ function openPrintCargasModal() {
     // Attach change listener
     dateInput.onchange = () => generatePrintCargasPreview();
 
-    // Generate initial preview
+    // 🆕 v2.52.48: arrancar sempre em modo Dia (default seguro, idêntico ao histórico)
+    setPrintCargasMode('day');
+}
+
+// 🆕 v2.52.48: troca entre modo "dia" e "semana" — só UI + re-render do preview, zero BD writes
+function setPrintCargasMode(mode) {
+    _printCargasMode = (mode === 'week') ? 'week' : 'day';
+
+    const dayBtn = document.getElementById('print-mode-day-btn');
+    const weekBtn = document.getElementById('print-mode-week-btn');
+    const label = document.getElementById('print-cargas-date-label');
+    const subtitle = document.getElementById('print-cargas-subtitle');
+    const weekInfo = document.getElementById('print-cargas-week-info');
+
+    if (_printCargasMode === 'week') {
+        if (dayBtn) { dayBtn.classList.remove('btn-primary'); dayBtn.classList.add('btn-secondary'); }
+        if (weekBtn) { weekBtn.classList.remove('btn-secondary'); weekBtn.classList.add('btn-primary'); }
+        if (label) label.textContent = 'Semana de (escolhe qualquer dia da semana):';
+        if (subtitle) subtitle.textContent = 'A imprimir a semana ISO inteira (Seg → Dom)';
+        if (weekInfo) weekInfo.style.display = 'block';
+    } else {
+        if (weekBtn) { weekBtn.classList.remove('btn-primary'); weekBtn.classList.add('btn-secondary'); }
+        if (dayBtn) { dayBtn.classList.remove('btn-secondary'); dayBtn.classList.add('btn-primary'); }
+        if (label) label.textContent = 'Dia:';
+        if (subtitle) subtitle.textContent = 'Escolha o dia para imprimir';
+        if (weekInfo) { weekInfo.style.display = 'none'; weekInfo.textContent = ''; }
+    }
+
     generatePrintCargasPreview();
+}
+
+// 🆕 v2.52.48: dada uma data, devolve os 7 dias da semana ISO (Seg..Dom) que a contém.
+function _getIsoWeekDays(d) {
+    const date = new Date(d);
+    date.setHours(0, 0, 0, 0);
+    const dow = date.getDay(); // 0=Dom, 1=Seg, ..., 6=Sáb
+    const offsetToMon = (dow === 0) ? 6 : (dow - 1);
+    const monday = new Date(date);
+    monday.setDate(date.getDate() - offsetToMon);
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+        const day = new Date(monday);
+        day.setDate(monday.getDate() + i);
+        days.push(day);
+    }
+    return days;
 }
 
 function closePrintCargasModal() {
@@ -8865,10 +8912,93 @@ function closePrintCargasModal() {
     if (modal) modal.classList.remove('active');
 }
 
+// 🆕 v2.52.48: Helper puro para preparar dados de UM dia. Lê apenas (SELECT).
+// Devolve { rows, blocks, grouped, sortedSlots, dateStr, dayName, hasData } — ou null se vazio sem erro.
+const _MONTH_NAMES_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+const _DAY_NAMES_PT = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
+const _SLOT_ORDER = ['Sem Horário','06:00 - 08:00','08:00 - 10:00','10:00 - 12:00','12:00 - 14:00','14:00 - 16:00','16:00 - 18:00','18:00 - 20:00'];
+
+async function _fetchDayCargas(selectedDate) {
+    const day = String(selectedDate.getDate()).padStart(2, '0');
+    const monthAbbr = _MONTH_NAMES_PT[selectedDate.getMonth()];
+    const year = selectedDate.getFullYear();
+    const dateStr = `${day}/${monthAbbr}`;
+    const dayName = _DAY_NAMES_PT[selectedDate.getDay()];
+
+    const { data, error } = await db
+        .from('mapa_encomendas')
+        .select('*')
+        .eq('month', monthAbbr)
+        .eq('year', year)
+        .eq('date', dateStr)
+        .order('row_order', { ascending: true });
+    if (error) throw error;
+
+    const blocks = buildTransportBlocks(data || []);
+    const grouped = {};
+    blocks.forEach(block => {
+        const slot = block.horario_carga || 'Sem Horário';
+        if (!grouped[slot]) grouped[slot] = [];
+        grouped[slot].push(block);
+    });
+    const sortedSlots = Object.keys(grouped).sort((a, b) => {
+        const ia = _SLOT_ORDER.indexOf(a);
+        const ib = _SLOT_ORDER.indexOf(b);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+
+    return { blocks, grouped, sortedSlots, dateStr, dayName, year, hasData: blocks.length > 0 };
+}
+
+// 🆕 v2.52.48: gera o HTML do preview (idêntico ao antigo) para um único dia.
+function _buildDayPreviewHtml(dayPayload) {
+    const { blocks, grouped, sortedSlots, dateStr, dayName } = dayPayload;
+    let html = `<div style="margin-bottom:12px;">
+        <strong style="font-size:16px;">${dateStr} — ${dayName}</strong>
+        <span style="color:#666;margin-left:12px;">${blocks.length} entrega(s)</span>
+    </div>`;
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<thead><tr style="background:#E5E5EA;">';
+    html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Horário</th>';
+    html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Transp</th>';
+    html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Cliente</th>';
+    html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Local</th>';
+    html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Medida</th>';
+    html += '<th style="padding:6px 8px;text-align:right;border:1px solid #D1D1D6;">Qtd</th>';
+    html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">ENC</th>';
+    html += '<th style="padding:6px 8px;text-align:left;border:1px solid #D1D1D6;">Obs</th>';
+    html += '</tr></thead><tbody>';
+    sortedSlots.forEach(slot => {
+        grouped[slot].forEach((block, bi) => {
+            const totalItems = block.items.length;
+            block.items.forEach((item, ii) => {
+                html += '<tr style="border-bottom:1px solid #E5E5EA;">';
+                if (bi === 0 && ii === 0) {
+                    const slotBlockCount = grouped[slot].reduce((sum, b) => sum + b.items.length, 0);
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;font-weight:600;vertical-align:top;" rowspan="${slotBlockCount}">${slot}</td>`;
+                }
+                if (ii === 0) {
+                    html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;font-weight:600;vertical-align:top;background:#f0f4ff;" rowspan="${totalItems}">${block.transp}<br><span style="font-size:10px;color:#666;">NºV: ${block.nviagem || '—'}</span></td>`;
+                }
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.cliente}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.local}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.medida}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;text-align:right;">${item.qtd}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.enc}</td>`;
+                html += `<td style="padding:6px 8px;border:1px solid #D1D1D6;">${item.obs}</td>`;
+                html += '</tr>';
+            });
+        });
+    });
+    html += '</tbody></table>';
+    return html;
+}
+
 async function generatePrintCargasPreview() {
     const dateInput = document.getElementById('print-cargas-date');
     const preview = document.getElementById('print-cargas-preview');
     const printBtn = document.getElementById('print-cargas-confirm-btn');
+    const weekInfo = document.getElementById('print-cargas-week-info');
 
     if (!dateInput.value) {
         preview.innerHTML = '<p style="color:#999;text-align:center;">Selecione uma data.</p>';
@@ -8877,6 +9007,61 @@ async function generatePrintCargasPreview() {
     }
 
     const selectedDate = new Date(dateInput.value);
+
+    // 🆕 v2.52.48: ramo "Semana" — itera 7 dias, junta tudo no preview
+    if (_printCargasMode === 'week') {
+        preview.innerHTML = '<p style="text-align:center;color:#666;">⏳ A carregar semana...</p>';
+        try {
+            const days = _getIsoWeekDays(selectedDate);
+            const firstStr = `${String(days[0].getDate()).padStart(2,'0')}/${_MONTH_NAMES_PT[days[0].getMonth()]}`;
+            const lastStr  = `${String(days[6].getDate()).padStart(2,'0')}/${_MONTH_NAMES_PT[days[6].getMonth()]}`;
+            if (weekInfo) weekInfo.textContent = `Intervalo: ${firstStr} → ${lastStr} (${days[0].getFullYear()})`;
+
+            const dayPayloads = [];
+            for (const d of days) {
+                const payload = await _fetchDayCargas(d);
+                dayPayloads.push(payload);
+            }
+
+            const daysWithData = dayPayloads.filter(p => p.hasData);
+            if (daysWithData.length === 0) {
+                preview.innerHTML = `<p style="text-align:center;color:#999;padding:20px;">Sem cargas em nenhum dia da semana <strong>${firstStr} → ${lastStr}</strong></p>`;
+                printBtn.disabled = true;
+                return;
+            }
+
+            let html = `<div style="margin-bottom:16px;padding:10px;background:#fff8e1;border-left:4px solid #FF9500;border-radius:4px;">
+                <strong style="font-size:15px;">Semana ${firstStr} → ${lastStr}</strong>
+                <span style="color:#666;margin-left:8px;">${daysWithData.length} dia(s) com cargas</span>
+            </div>`;
+            for (const p of dayPayloads) {
+                if (!p.hasData) {
+                    html += `<div style="margin:14px 0;padding:8px 12px;background:#f5f5f7;color:#999;border-radius:4px;font-size:13px;">
+                        <strong>${p.dateStr} — ${p.dayName}</strong> · sem cargas
+                    </div>`;
+                    continue;
+                }
+                html += `<div style="margin-top:18px;">${_buildDayPreviewHtml(p)}</div>`;
+            }
+            preview.innerHTML = html;
+            printBtn.disabled = false;
+
+            window._printCargasData = {
+                mode: 'week',
+                days: dayPayloads,
+                rangeFirst: firstStr,
+                rangeLast: lastStr,
+                year: days[0].getFullYear(),
+            };
+        } catch (err) {
+            console.error('Erro ao gerar preview semanal:', err);
+            preview.innerHTML = `<p style="color:#FF3B30;text-align:center;">❌ Erro: ${err.message}</p>`;
+            printBtn.disabled = true;
+        }
+        return;
+    }
+
+    // Ramo "Dia" — preserva 100% o comportamento histórico
     const day = String(selectedDate.getDate()).padStart(2, '0');
     const monthNames = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
     const monthAbbr = monthNames[selectedDate.getMonth()];
@@ -8969,7 +9154,7 @@ async function generatePrintCargasPreview() {
         printBtn.disabled = false;
 
         // Store for printing
-        window._printCargasData = { blocks, dateStr, dayName, year, grouped, sortedSlots };
+        window._printCargasData = { mode: 'day', blocks, dateStr, dayName, year, grouped, sortedSlots };
 
     } catch (err) {
         console.error('Erro ao gerar preview de impressão:', err);
@@ -8978,8 +9163,91 @@ async function generatePrintCargasPreview() {
     }
 }
 
+// 🆕 v2.52.48: gera as <tr> da tabela de impressão para um dia (idêntico ao histórico do day mode)
+function _buildPrintRowsHtml(grouped, sortedSlots) {
+    let html = '';
+    sortedSlots.forEach(slot => {
+        grouped[slot].forEach((block, bi) => {
+            block.items.forEach((item, ii) => {
+                html += '<tr>';
+                if (bi === 0 && ii === 0) {
+                    const slotRows = grouped[slot].reduce((s, b) => s + b.items.length, 0);
+                    html += `<td rowspan="${slotRows}" style="font-weight:700;vertical-align:top;">${slot}</td>`;
+                }
+                if (ii === 0) {
+                    html += `<td class="transp-cell" rowspan="${block.items.length}">${block.transp}<br><small>NV: ${block.nviagem || '—'}</small></td>`;
+                }
+                html += `<td>${item.cliente}</td>`;
+                html += `<td>${item.local}</td>`;
+                html += `<td>${item.medida}</td>`;
+                html += `<td style="text-align:right;">${item.qtd}</td>`;
+                html += `<td>${item.enc}</td>`;
+                html += `<td>${item.obs}</td>`;
+                html += '</tr>';
+            });
+        });
+    });
+    return html;
+}
+
 function executePrintCargas() {
     if (!window._printCargasData) return;
+
+    // 🆕 v2.52.48: ramo "semana" — uma página por dia, header geral da semana
+    if (window._printCargasData.mode === 'week') {
+        const { days, rangeFirst, rangeLast, year } = window._printCargasData;
+        const daysWithData = days.filter(d => d.hasData);
+
+        let printHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Cargas Semana ${rangeFirst} → ${rangeLast}</title>
+<style>
+    @page { size: landscape; margin: 12mm; }
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #000; }
+    h1 { font-size: 18px; margin-bottom: 4px; }
+    h2 { font-size: 13px; color: #555; margin-top: 0; font-weight: normal; }
+    h3 { font-size: 15px; margin: 0 0 6px 0; padding: 6px 8px; background: #fff4e6; border-left: 4px solid #FF9500; }
+    table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    th { background: #333; color: #fff; padding: 6px 8px; text-align: left; font-size: 11px; }
+    td { padding: 5px 8px; border: 1px solid #ccc; font-size: 11px; }
+    .transp-cell { font-weight: 700; background: #f0f4ff; vertical-align: top; }
+    .day-section { page-break-after: always; }
+    .day-section:last-child { page-break-after: auto; }
+    .empty-day { color:#999; font-style:italic; padding: 6px 8px; }
+    .footer { margin-top: 16px; font-size: 10px; color: #999; text-align: right; }
+</style></head><body>
+<h1>Cargas da Semana — ${rangeFirst} → ${rangeLast} (${year})</h1>
+<h2>PSY — Gestao de Estufas | ${daysWithData.length} dia(s) com cargas | Impresso: ${new Date().toLocaleString('pt-PT')}</h2>`;
+
+        days.forEach(p => {
+            printHtml += `<div class="day-section">`;
+            printHtml += `<h3>${p.dateStr} — ${p.dayName}${p.hasData ? ` · ${p.blocks.length} entrega(s)` : ''}</h3>`;
+            if (!p.hasData) {
+                printHtml += `<div class="empty-day">Sem cargas neste dia.</div>`;
+            } else {
+                printHtml += `<table><thead><tr>
+                    <th>Horario</th><th>Transp.</th><th>Cliente</th><th>Local</th>
+                    <th>Medida</th><th style="text-align:right;">Qtd</th><th>ENC</th><th>Obs</th>
+                </tr></thead><tbody>`;
+                printHtml += _buildPrintRowsHtml(p.grouped, p.sortedSlots);
+                printHtml += `</tbody></table>`;
+            }
+            printHtml += `</div>`;
+        });
+
+        printHtml += `<div class="footer">PalSystems — Gestão de Estufas e Cargas</div></body></html>`;
+
+        const printWindow = window.open('', '_blank', 'width=1100,height=700');
+        printWindow.document.write(printHtml);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => { printWindow.print(); }, 500);
+
+        closePrintCargasModal();
+        showToast('🖨️ Janela de impressão semanal aberta', 'info');
+        return;
+    }
+
+    // Ramo "Dia" — código histórico (mantido intacto)
     const { blocks, dateStr, dayName, year, grouped, sortedSlots } = window._printCargasData;
 
     // 🔥 v2.52.1: Impressão com blocos de transporte

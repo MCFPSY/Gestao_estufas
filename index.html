@@ -2967,19 +2967,25 @@
         
     </script>
     
-    <!-- Modal: Imprimir Cargas de um Dia -->
+    <!-- Modal: Imprimir Cargas (Dia ou Semana — v2.52.48) -->
     <div class="modal" id="modal-print-cargas">
         <div class="modal-dialog" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">
             <div class="modal-sidebar" style="background: #FF9500;"></div>
             <div class="modal-body">
                 <button class="modal-close" onclick="closePrintCargasModal()">×</button>
                 <div class="modal-header">
-                    <h3>🖨️ Imprimir Cargas do Dia</h3>
-                    <p class="modal-subtitle">Escolha o dia para imprimir</p>
+                    <h3>🖨️ Imprimir Cargas</h3>
+                    <p class="modal-subtitle" id="print-cargas-subtitle">Escolha o dia para imprimir</p>
+                </div>
+                <!-- 🆕 v2.52.48: Toggle Dia / Semana -->
+                <div style="padding: 12px 24px 0 24px; display:flex; gap:8px;">
+                    <button type="button" id="print-mode-day-btn" class="btn-primary" onclick="setPrintCargasMode('day')" style="flex:1;">📅 Dia</button>
+                    <button type="button" id="print-mode-week-btn" class="btn-secondary" onclick="setPrintCargasMode('week')" style="flex:1;">📆 Semana</button>
                 </div>
                 <div style="padding: 16px 24px;">
-                    <label for="print-cargas-date" style="font-size:14px;font-weight:600;margin-bottom:8px;display:block;">Dia:</label>
+                    <label for="print-cargas-date" id="print-cargas-date-label" style="font-size:14px;font-weight:600;margin-bottom:8px;display:block;">Dia:</label>
                     <input type="date" id="print-cargas-date" style="padding:10px 14px;border:1px solid #D1D1D6;border-radius:8px;font-size:15px;width:100%;box-sizing:border-box;" />
+                    <div id="print-cargas-week-info" style="margin-top:8px;font-size:12px;color:#666;display:none;"></div>
                 </div>
                 <div id="print-cargas-preview" style="padding: 0 24px 16px 24px;">
                     <!-- Preview será gerado ao selecionar uma data -->
