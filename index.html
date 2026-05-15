@@ -2607,7 +2607,7 @@
                             <option value="PSY" selected>PSY</option>
                             <option value="MCF">MCF</option>
                         </select>
-                        <button class="btn-primary" id="btn-add-painel" style="padding:8px 14px;" disabled title="Disponível no próximo commit">➕ Adicionar painel</button>
+                        <button class="btn-primary" id="btn-add-painel" style="padding:8px 14px;" onclick="openAddPainelModal()">➕ Adicionar painel</button>
                     </div>
                 </div>
                 <div id="paineis-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">
@@ -2653,6 +2653,14 @@
                         <small style="font-size:11px;color:#999;display:block;margin-top:6px;">Os botões aplicam a mensagem padrão. Para texto custom usa o campo em baixo.</small>
                     </div>
 
+                    <!-- 🆕 v2.52.52: Presets rápidos -->
+                    <div style="margin-bottom:18px;">
+                        <label style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;">⚡ Presets rápidos:</label>
+                        <div id="painel-presets-row" style="display:flex;flex-wrap:wrap;gap:6px;">
+                            <small style="color:#999;font-size:11px;">A carregar...</small>
+                        </div>
+                    </div>
+
                     <div style="margin-bottom:16px;">
                         <label for="painel-custom-message" style="font-size:13px;font-weight:600;display:block;margin-bottom:8px;">Mensagem custom (mantém estado actual):</label>
                         <div style="display:flex;gap:8px;">
@@ -2661,11 +2669,71 @@
                         </div>
                     </div>
 
-                    <div style="display:flex;gap:8px;border-top:1px solid #E5E5EA;padding-top:14px;">
-                        <button type="button" class="btn-secondary" onclick="pingPainel()" style="flex:1;padding:10px;">📡 Testar conectividade</button>
-                        <button type="button" class="btn-secondary" onclick="closePainelDetail()" style="flex:1;padding:10px;">Fechar</button>
+                    <!-- 🆕 v2.52.52: Histórico recente -->
+                    <details style="margin-top:14px;border-top:1px solid #E5E5EA;padding-top:14px;">
+                        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#555;user-select:none;">📜 Histórico recente</summary>
+                        <div id="painel-detail-historico" style="margin-top:10px;font-size:12px;color:#555;max-height:200px;overflow-y:auto;background:#fafafa;padding:8px 12px;border-radius:6px;">
+                            <p style="color:#999;">⏳ A carregar...</p>
+                        </div>
+                    </details>
+
+                    <div style="display:flex;gap:8px;border-top:1px solid #E5E5EA;padding-top:14px;margin-top:14px;flex-wrap:wrap;">
+                        <button type="button" class="btn-secondary" onclick="pingPainel()" style="flex:1;min-width:120px;padding:10px;">📡 Testar conectividade</button>
+                        <button type="button" class="btn-secondary" onclick="openEditPainelFromDetail()" style="flex:1;min-width:120px;padding:10px;">✏️ Editar painel</button>
+                        <button type="button" class="btn-secondary" onclick="closePainelDetail()" style="flex:1;min-width:80px;padding:10px;">Fechar</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🆕 v2.52.52: Modal Adicionar / Editar painel -->
+    <div class="modal" id="modal-painel-edit">
+        <div class="modal-dialog" style="max-width: 520px;">
+            <div class="modal-sidebar" style="background: #FF9500;"></div>
+            <div class="modal-body">
+                <button class="modal-close" onclick="closePainelEdit()">×</button>
+                <div class="modal-header">
+                    <h3 id="painel-edit-title">➕ Adicionar painel</h3>
+                    <p class="modal-subtitle">Configuração da unidade física</p>
+                </div>
+                <form id="form-painel-edit" style="padding: 16px 24px;">
+                    <div style="margin-bottom:12px;">
+                        <label for="painel-edit-id" style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">ID (slug único):</label>
+                        <input type="text" id="painel-edit-id" required pattern="[a-z0-9_-]+" style="width:100%;padding:8px 12px;border:1px solid #D1D1D6;border-radius:6px;font-size:14px;box-sizing:border-box;font-family:monospace;" placeholder="ex: psy-linha-3" />
+                        <small id="painel-edit-id-help" style="font-size:11px;color:#999;">Letras minúsculas, números, _ e -. Imutável após criação.</small>
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <label for="painel-edit-nome" style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">Nome:</label>
+                        <input type="text" id="painel-edit-nome" required style="width:100%;padding:8px 12px;border:1px solid #D1D1D6;border-radius:6px;font-size:14px;box-sizing:border-box;" placeholder="ex: Linha 3 - Corte" />
+                    </div>
+                    <div style="display:flex;gap:8px;margin-bottom:12px;">
+                        <div style="flex:1;">
+                            <label for="painel-edit-fabrica" style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">Fábrica:</label>
+                            <select id="painel-edit-fabrica" required style="width:100%;padding:8px 12px;border:1px solid #D1D1D6;border-radius:6px;font-size:14px;box-sizing:border-box;">
+                                <option value="PSY">PSY</option>
+                                <option value="MCF">MCF</option>
+                            </select>
+                        </div>
+                        <div style="flex:2;">
+                            <label for="painel-edit-localizacao" style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">Localização:</label>
+                            <input type="text" id="painel-edit-localizacao" style="width:100%;padding:8px 12px;border:1px solid #D1D1D6;border-radius:6px;font-size:14px;box-sizing:border-box;" placeholder="ex: Pavilhão A, entrada" />
+                        </div>
+                    </div>
+                    <div style="margin-bottom:12px;">
+                        <label for="painel-edit-ip" style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">IP local na rede da fábrica:</label>
+                        <input type="text" id="painel-edit-ip" required pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}" style="width:100%;padding:8px 12px;border:1px solid #D1D1D6;border-radius:6px;font-size:14px;box-sizing:border-box;font-family:monospace;" placeholder="ex: 192.168.1.55" />
+                    </div>
+                    <div style="margin-bottom:14px;">
+                        <label style="font-size:13px;font-weight:600;"><input type="checkbox" id="painel-edit-ativo" checked /> Activo</label>
+                        <small style="font-size:11px;color:#999;display:block;">Painéis inactivos aparecem com borda tracejada e não recebem comandos do bridge.</small>
+                    </div>
+                    <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid #E5E5EA;flex-wrap:wrap;">
+                        <button type="button" id="painel-edit-delete-btn" onclick="deletePainel()" style="flex:1;min-width:100px;background:#FF3B30;color:#fff;border:none;padding:10px;border-radius:8px;font-weight:600;cursor:pointer;display:none;">🗑️ Apagar</button>
+                        <button type="button" class="btn-secondary" onclick="closePainelEdit()" style="flex:1;min-width:100px;padding:10px;">Cancelar</button>
+                        <button type="submit" class="btn-primary" style="flex:1;min-width:100px;padding:10px;">💾 Guardar</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>

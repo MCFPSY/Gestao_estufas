@@ -9365,7 +9365,7 @@ async function initPaineisIfNeeded() {
         filter.addEventListener('change', () => renderPaineisGrid());
     }
 
-    await loadPaineis();
+    await Promise.all([loadPaineis(), loadPaineisPresets()]);  // 🆕 v2.52.52: presets em paralelo
     setupPaineisRealtime();
 }
 
@@ -9484,6 +9484,10 @@ function setupPaineisRealtime() {
                     // 🆕 v2.52.51: se o modal de detalhe estiver aberto neste painel, refresh visual
                     if (_selectedPainelId && payload.new?.id === _selectedPainelId) {
                         _refreshPainelDetailFromCache();
+                        // 🆕 v2.52.52: histórico também é re-carregado em mudanças
+                        if (typeof _loadPainelHistorico === 'function') {
+                            _loadPainelHistorico(_selectedPainelId);
+                        }
                     }
                 });
             }
@@ -9511,6 +9515,10 @@ function openPainelDetail(painelId) {
     _selectedPainelId = painelId;
     _refreshPainelDetailFromCache();
     document.getElementById('modal-painel-detail').classList.add('active');
+
+    // 🆕 v2.52.52: presets + histórico em paralelo (não bloqueiam abertura do modal)
+    renderPainelPresetsRow();
+    _loadPainelHistorico(painelId);
 }
 
 function closePainelDetail() {
@@ -9615,6 +9623,209 @@ async function _applyPanelChange(painelId, newState, newMessage) {
 function pingPainel() {
     if (!_selectedPainelId) return;
     showToast('📡 Ping ainda não disponível — bridge daemon chega no v2.52.53. A BD foi actualizada na mesma; o painel físico só receberá quando o bridge estiver instalado no Raspberry Pi.', 'info');
+}
+
+// ===================================================================
+// 🆕 v2.52.52: Presets + Adicionar/Editar painel + Histórico (commit 4/5)
+// ===================================================================
+
+let paineisPresetsData = [];
+
+async function loadPaineisPresets() {
+    try {
+        const { data, error } = await db
+            .from('paineis_andon_presets')
+            .select('*')
+            .order('ordem', { ascending: true });
+        if (error) throw error;
+        paineisPresetsData = data || [];
+        console.log(`⚡ ${paineisPresetsData.length} presets carregados`);
+    } catch (err) {
+        console.warn('⚠️ Não foi possível carregar presets:', err);
+        paineisPresetsData = [];
+    }
+}
+
+function renderPainelPresetsRow() {
+    const p = paineisData.find(x => x.id === _selectedPainelId);
+    if (!p) return;
+    const container = document.getElementById('painel-presets-row');
+    if (!container) return;
+
+    // Presets aplicáveis: globais (fabrica NULL) ou da mesma fábrica
+    const applicable = paineisPresetsData.filter(pr => !pr.fabrica || pr.fabrica === p.fabrica);
+
+    if (applicable.length === 0) {
+        container.innerHTML = '<small style="color:#999;font-size:11px;">Sem presets aplicáveis a esta fábrica.</small>';
+        return;
+    }
+
+    const stateColors = { verde: '#34C759', amarelo: '#FF9500', vermelho: '#FF3B30' };
+    container.innerHTML = applicable.map(pr => {
+        const bg = pr.cor_fundo || stateColors[pr.estado] || '#999';
+        const fg = pr.cor_texto || (pr.estado === 'amarelo' ? '#1d1d1f' : '#fff');
+        return `<button type="button" onclick="applyPreset('${pr.id}')"
+            title="${_paineisEscape(pr.estado)} · ${_paineisEscape(pr.mensagem)}"
+            style="background:${bg};color:${fg};border:none;padding:6px 12px;border-radius:18px;font-size:12px;font-weight:600;cursor:pointer;">
+            ${_paineisEscape(pr.nome)}
+        </button>`;
+    }).join('');
+}
+
+async function applyPreset(presetId) {
+    if (!_selectedPainelId) return;
+    const pr = paineisPresetsData.find(x => x.id === presetId);
+    if (!pr) {
+        showToast('❌ Preset não encontrado', 'error');
+        return;
+    }
+    await _applyPanelChange(_selectedPainelId, pr.estado, pr.mensagem);
+}
+
+// --- Histórico ---
+
+async function _loadPainelHistorico(painelId) {
+    const container = document.getElementById('painel-detail-historico');
+    if (!container) return;
+    container.innerHTML = '<p style="color:#999;">⏳ A carregar...</p>';
+    try {
+        const { data, error } = await db
+            .from('paineis_andon_historico')
+            .select('*')
+            .eq('painel_id', painelId)
+            .order('criado_em', { ascending: false })
+            .limit(10);
+        if (error) throw error;
+        if (!data || data.length === 0) {
+            container.innerHTML = '<p style="color:#999;margin:0;">Sem alterações registadas ainda.</p>';
+            return;
+        }
+        const stateEmoji = { verde: '🟢', amarelo: '🟡', vermelho: '🔴' };
+        container.innerHTML = data.map(h => {
+            const dt = new Date(h.criado_em);
+            const dtStr = dt.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+            const prevE = stateEmoji[h.estado_anterior] || '◽';
+            const newE = stateEmoji[h.estado_novo] || '◽';
+            const who = (h.alterado_por || 'desconhecido').split('@')[0];
+            return `<div style="padding:6px 0;border-bottom:1px solid #eee;">
+                <div style="display:flex;justify-content:space-between;gap:8px;">
+                    <span><span style="color:#999;">${dtStr}</span> ${prevE} → ${newE} <strong>${_paineisEscape(h.mensagem || '—')}</strong></span>
+                    <span style="color:#999;font-size:10px;white-space:nowrap;">por ${_paineisEscape(who)}</span>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        container.innerHTML = `<p style="color:#FF3B30;margin:0;">Erro: ${err.message}</p>`;
+    }
+}
+
+// --- Adicionar / Editar painel ---
+
+let _editingPainelId = null;
+
+function openAddPainelModal() {
+    _editingPainelId = null;
+    document.getElementById('painel-edit-title').textContent = '➕ Adicionar painel';
+    const form = document.getElementById('form-painel-edit');
+    form.reset();
+    document.getElementById('painel-edit-id').readOnly = false;
+    document.getElementById('painel-edit-id-help').style.display = '';
+    document.getElementById('painel-edit-delete-btn').style.display = 'none';
+    document.getElementById('painel-edit-ativo').checked = true;
+    document.getElementById('modal-painel-edit').classList.add('active');
+    setTimeout(() => document.getElementById('painel-edit-id').focus(), 50);
+}
+
+function openEditPainelFromDetail() {
+    if (!_selectedPainelId) return;
+    openEditPainelModal(_selectedPainelId);
+}
+
+function openEditPainelModal(painelId) {
+    const p = paineisData.find(x => x.id === painelId);
+    if (!p) {
+        showToast('❌ Painel não encontrado', 'error');
+        return;
+    }
+    _editingPainelId = painelId;
+    document.getElementById('painel-edit-title').textContent = `✏️ Editar ${p.nome}`;
+    document.getElementById('painel-edit-id').value = p.id;
+    document.getElementById('painel-edit-id').readOnly = true;
+    document.getElementById('painel-edit-id-help').style.display = 'none';
+    document.getElementById('painel-edit-nome').value = p.nome;
+    document.getElementById('painel-edit-fabrica').value = p.fabrica;
+    document.getElementById('painel-edit-localizacao').value = p.localizacao || '';
+    document.getElementById('painel-edit-ip').value = p.ip_local;
+    document.getElementById('painel-edit-ativo').checked = p.ativo;
+    document.getElementById('painel-edit-delete-btn').style.display = '';
+    document.getElementById('modal-painel-edit').classList.add('active');
+}
+
+function closePainelEdit() {
+    document.getElementById('modal-painel-edit').classList.remove('active');
+    _editingPainelId = null;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const form = document.getElementById('form-painel-edit');
+    if (!form) return;
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = document.getElementById('painel-edit-id').value.trim();
+        const nome = document.getElementById('painel-edit-nome').value.trim();
+        const fabrica = document.getElementById('painel-edit-fabrica').value;
+        const localizacao = document.getElementById('painel-edit-localizacao').value.trim() || null;
+        const ip_local = document.getElementById('painel-edit-ip').value.trim();
+        const ativo = document.getElementById('painel-edit-ativo').checked;
+
+        if (!_editingPainelId && !/^[a-z0-9_-]+$/.test(id)) {
+            showToast('❌ ID inválido — só letras minúsculas, números, _ e -', 'error');
+            return;
+        }
+
+        try {
+            if (_editingPainelId) {
+                const { error } = await db.from('paineis_andon')
+                    .update({ nome, fabrica, localizacao, ip_local, ativo })
+                    .eq('id', _editingPainelId);
+                if (error) throw error;
+                showToast(`✅ Painel "${nome}" actualizado`, 'success');
+            } else {
+                const { error } = await db.from('paineis_andon').insert({
+                    id, nome, fabrica, localizacao, ip_local, ativo,
+                    estado_atual: 'verde', mensagem_atual: 'OK'
+                });
+                if (error) throw error;
+                showToast(`✅ Painel "${nome}" criado`, 'success');
+            }
+            closePainelEdit();
+            // Realtime vai disparar reload — mas força já para UX instantâneo
+            await loadPaineis();
+        } catch (err) {
+            console.error('❌ Erro a guardar painel:', err);
+            showToast(`❌ Erro: ${err.message}`, 'error');
+        }
+    });
+});
+
+async function deletePainel() {
+    if (!_editingPainelId) return;
+    const p = paineisData.find(x => x.id === _editingPainelId);
+    if (!p) return;
+    const ok = confirm(`Apagar painel "${p.nome}" (${p.id})?\n\nAtenção: o histórico completo deste painel também desaparece (ON DELETE CASCADE).\n\nNão pode ser desfeito.`);
+    if (!ok) return;
+
+    try {
+        const { error } = await db.from('paineis_andon').delete().eq('id', _editingPainelId);
+        if (error) throw error;
+        showToast(`🗑️ Painel "${p.nome}" apagado`, 'success');
+        closePainelEdit();
+        closePainelDetail();
+        await loadPaineis();
+    } catch (err) {
+        console.error('❌ Erro a apagar painel:', err);
+        showToast(`❌ Erro: ${err.message}`, 'error');
+    }
 }
 
 // 🔥 v2.51.36i: Garantir que auto-refresh inicia
