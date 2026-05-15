@@ -9449,13 +9449,15 @@ function renderPaineisCard(p) {
 
     const lastUpdated = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
 
-    // Render dos blocos de zona (1, 2 ou 3 colunas que espelham o painel físico)
+    // 🆕 v2.52.54-E: blocos de zona com número discreto no canto (só em multi-zona)
     const zonesHtml = zonas.map((z, i) => {
         const sc = _PAINEIS_STATE_COLORS[z.estado] || { bg: '#999', fg: '#fff' };
         const msg = _paineisEscape(z.mensagem || '—');
-        // Tamanho de fonte adapta-se ao número de zonas (mais zonas = letra menor)
         const fontSize = layout === 1 ? '26px' : layout === 2 ? '20px' : '16px';
-        return `<div style="flex:1;background:${sc.bg};color:${sc.fg};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:${fontSize};line-height:1.1;padding:6px;text-align:center;word-break:break-word;min-width:0;">${msg}</div>`;
+        const zoneLabel = (layout > 1)
+            ? `<div style="position:absolute;top:3px;left:5px;font-size:9px;font-weight:700;opacity:0.55;background:rgba(255,255,255,0.25);padding:0 4px;border-radius:3px;">${i+1}</div>`
+            : '';
+        return `<div style="flex:1;background:${sc.bg};color:${sc.fg};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:${fontSize};line-height:1.1;padding:6px;text-align:center;word-break:break-word;min-width:0;position:relative;">${zoneLabel}${msg}</div>`;
     }).join('');
 
     return `
@@ -9514,10 +9516,23 @@ function setupPaineisRealtime() {
                 console.log(`🏭 Realtime paineis_andon: ${payload.eventType} ${payload.new?.id || payload.old?.id || ''}`);
                 // Re-load completo é mais simples e os volumes são pequenos (~10-30 paineis)
                 loadPaineis().then(() => {
-                    // 🆕 v2.52.51: se o modal de detalhe estiver aberto neste painel, refresh visual
                     if (_selectedPainelId && payload.new?.id === _selectedPainelId) {
-                        _refreshPainelDetailFromCache();
-                        // 🆕 v2.52.52: histórico também é re-carregado em mudanças
+                        // 🆕 v2.52.54: se o user tem draft sujo, NÃO o sobrescrever — só avisar
+                        if (_painelDraftDirty()) {
+                            const status = document.getElementById('painel-draft-status');
+                            if (status) {
+                                status.textContent = '⚠️ Outro user alterou — Guarda para sobrescrever ou Descarta para ver';
+                                status.style.color = '#FF3B30';
+                                status.style.fontWeight = '700';
+                            }
+                        } else {
+                            // Re-init draft a partir do novo cache
+                            _painelDraft = null;
+                            _painelDraftBase = null;
+                            _painelEnsureDraft();
+                            _refreshPainelDetailFromCache();
+                        }
+                        // Histórico actualiza sempre
                         if (typeof _loadPainelHistorico === 'function') {
                             _loadPainelHistorico(_selectedPainelId);
                         }
@@ -9539,6 +9554,41 @@ function setupPaineisRealtime() {
 
 let _selectedPainelId = null;
 
+// 🆕 v2.52.54: estado de rascunho — separado do cache. Edições mexem aqui;
+// só o "Guardar" escreve à BD. _painelDraftBase guarda o snapshot inicial
+// para detectar dirty.
+let _painelDraft = null;       // { layout, zonas: [{estado, mensagem}, ...] }
+let _painelDraftBase = null;   // JSON.stringify do _painelDraft no momento de abertura
+
+function _painelEnsureDraft() {
+    if (_painelDraft !== null) return _painelDraft;
+    const p = paineisData.find(x => x.id === _selectedPainelId);
+    if (!p) return null;
+    const { layout, zonas } = _paineisGetLayoutZonas(p);
+    _painelDraft = { layout, zonas: zonas.map(z => ({ estado: z.estado, mensagem: z.mensagem })) };
+    _painelDraftBase = JSON.stringify(_painelDraft);
+    return _painelDraft;
+}
+
+function _painelDraftDirty() {
+    if (_painelDraft === null) return false;
+    return JSON.stringify(_painelDraft) !== _painelDraftBase;
+}
+
+function _painelUpdateDraftActionBar() {
+    const dirty = _painelDraftDirty();
+    const status = document.getElementById('painel-draft-status');
+    const saveBtn = document.getElementById('painel-save-btn');
+    const discardBtn = document.getElementById('painel-discard-btn');
+    if (status) {
+        status.textContent = dirty ? '⏳ Alterações pendentes — não esquecer Guardar' : 'Sem alterações pendentes';
+        status.style.color = dirty ? '#FF9500' : '#999';
+        status.style.fontWeight = dirty ? '600' : '400';
+    }
+    if (saveBtn) saveBtn.disabled = !dirty;
+    if (discardBtn) discardBtn.disabled = !dirty;
+}
+
 function openPainelDetail(painelId) {
     const p = paineisData.find(x => x.id === painelId);
     if (!p) {
@@ -9546,23 +9596,45 @@ function openPainelDetail(painelId) {
         return;
     }
     _selectedPainelId = painelId;
+    // 🆕 v2.52.54: arranca sempre com draft limpo (= cache)
+    _painelDraft = null;
+    _painelDraftBase = null;
+    _painelEnsureDraft();
     _refreshPainelDetailFromCache();
     document.getElementById('modal-painel-detail').classList.add('active');
 
-    // 🆕 v2.52.52: presets + histórico em paralelo (não bloqueiam abertura do modal)
+    // Presets + histórico em paralelo
     renderPainelPresetsRow();
     _loadPainelHistorico(painelId);
+
+    // 🆕 v2.52.54-F: auto-focus na mensagem da zona 1 para edição rápida
+    setTimeout(() => {
+        const first = document.getElementById('zone-msg-0');
+        if (first) { first.focus(); first.select(); }
+    }, 80);
 }
 
 function closePainelDetail() {
+    // 🆕 v2.52.54: aviso se houver alterações pendentes
+    if (_painelDraftDirty()) {
+        if (!confirm('Tens alterações por gravar. Fechar mesmo assim descarta-as. Continuar?')) {
+            return;
+        }
+    }
     document.getElementById('modal-painel-detail').classList.remove('active');
     _selectedPainelId = null;
+    _painelDraft = null;
+    _painelDraftBase = null;
 }
 
 function _refreshPainelDetailFromCache() {
     const p = paineisData.find(x => x.id === _selectedPainelId);
     if (!p) return;
-    const { layout, zonas } = _paineisGetLayoutZonas(p);
+
+    // 🆕 v2.52.54: lê do draft (que está sempre presente quando modal aberto)
+    const d = _painelEnsureDraft();
+    if (!d) return;
+    const { layout, zonas } = d;
 
     document.getElementById('painel-detail-title').textContent = `🏭 ${p.nome}`;
     document.getElementById('painel-detail-subtitle').textContent = `Fábrica ${p.fabrica} · ${p.localizacao || 'sem localização'}`;
@@ -9571,14 +9643,14 @@ function _refreshPainelDetailFromCache() {
     document.getElementById('painel-detail-localizacao').textContent = p.localizacao || '—';
     document.getElementById('painel-detail-ip').textContent = p.ip_local;
 
-    // 🆕 v2.52.53: preview visual das zonas no header
+    // Preview visual das zonas no header (mostra draft, não cache directo)
     const preview = document.getElementById('painel-detail-zones-preview');
     preview.innerHTML = zonas.map(z => {
         const sc = _PAINEIS_STATE_COLORS[z.estado] || { bg: '#999', fg: '#fff' };
         return `<div style="flex:1;background:${sc.bg};color:${sc.fg};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;">${_paineisEscape(z.mensagem || '—')}</div>`;
     }).join('');
 
-    // 🆕 v2.52.53: marcar layout activo nos botões
+    // Marcar layout activo nos botões
     document.querySelectorAll('#painel-layout-selector button').forEach(btn => {
         const isActive = parseInt(btn.dataset.layout, 10) === layout;
         btn.style.background = isActive ? '#FF9500' : '#F5F5F7';
@@ -9587,8 +9659,13 @@ function _refreshPainelDetailFromCache() {
         btn.style.fontWeight = isActive ? '700' : '400';
     });
 
-    // 🆕 v2.52.53: editores de zona dinâmicos
+    // Editores de zona dinâmicos (lêem do draft)
     _renderZoneEditors(layout, zonas);
+
+    // 🆕 v2.52.54: action bar + multi-zona helpers visibility
+    _painelUpdateDraftActionBar();
+    document.getElementById('painel-apply-all-row').style.display = (layout > 1) ? 'block' : 'none';
+    _updatePresetTargetSelector(layout);
 
     const meta = document.getElementById('painel-detail-meta');
     const updateStr = p.atualizado_em ? _paineisFormatRelative(new Date(p.atualizado_em)) : '—';
@@ -9596,7 +9673,30 @@ function _refreshPainelDetailFromCache() {
     meta.textContent = `Última actualização: ${updateStr} · ${onlineStr}`;
 }
 
-// 🆕 v2.52.53: gera editores de zona dentro de #painel-zones-editors
+// 🆕 v2.52.54: actualiza o selector de "aplicar preset a" — visível só em multi-zona
+function _updatePresetTargetSelector(layout) {
+    const row = document.getElementById('painel-preset-target-row');
+    const select = document.getElementById('painel-preset-target');
+    if (!row || !select) return;
+    if (layout <= 1) {
+        row.style.display = 'none';
+        return;
+    }
+    row.style.display = 'block';
+    const prevValue = select.value;
+    const options = [];
+    for (let i = 0; i < layout; i++) {
+        options.push(`<option value="zone-${i}">Zona ${i+1}</option>`);
+    }
+    options.push('<option value="all">Todas as zonas</option>');
+    options.push('<option value="reset">Substituir tudo (1 zona)</option>');
+    select.innerHTML = options.join('');
+    if (prevValue && [...select.options].some(o => o.value === prevValue)) {
+        select.value = prevValue;
+    }
+}
+
+// 🆕 v2.52.53/54: editores de zona em modo draft (sem botão "Aplicar" por zona)
 function _renderZoneEditors(layout, zonas) {
     const container = document.getElementById('painel-zones-editors');
     if (!container) return;
@@ -9608,9 +9708,9 @@ function _renderZoneEditors(layout, zonas) {
         const stateButtonsHtml = STATES.map(s => {
             const bgC = _PAINEIS_STATE_COLORS[s].bg;
             const isActive = z.estado === s;
-            return `<button type="button" onclick="applyZoneState(${idx}, '${s}')"
+            return `<button type="button" onclick="draftZoneState(${idx}, '${s}')"
                 style="flex:1;background:${bgC};color:${s==='amarelo'?'#1d1d1f':'#fff'};border:${isActive?'3px solid #1d1d1f':'1px solid transparent'};padding:8px 4px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
-                ${stateEmoji[s]}
+                ${stateEmoji[s]} ${isActive ? '✓' : ''}
             </button>`;
         }).join('');
 
@@ -9622,52 +9722,123 @@ function _renderZoneEditors(layout, zonas) {
             <div style="display:flex;gap:6px;margin-bottom:6px;">
                 ${stateButtonsHtml}
             </div>
-            <div style="display:flex;gap:6px;">
-                <input type="text" id="zone-msg-${idx}" value="${_paineisEscape(z.mensagem || '')}" placeholder="Mensagem zona ${idx+1}" maxlength="20" style="flex:1;padding:8px 10px;border:1px solid #D1D1D6;border-radius:6px;font-size:13px;box-sizing:border-box;" />
-                <button type="button" class="btn-primary" onclick="applyZoneMessage(${idx})" style="padding:8px 12px;font-size:12px;white-space:nowrap;">Aplicar</button>
-            </div>
+            <input type="text" id="zone-msg-${idx}" value="${_paineisEscape(z.mensagem || '')}" placeholder="Mensagem zona ${idx+1}" maxlength="20"
+                oninput="draftZoneMessageInput(${idx}, this.value)"
+                onkeydown="_onZoneMessageKeydown(event, ${idx})"
+                style="width:100%;padding:8px 10px;border:1px solid #D1D1D6;border-radius:6px;font-size:13px;box-sizing:border-box;" />
         </div>`;
     }).join('');
 }
 
-// 🆕 v2.52.53: muda layout (1/2/3 zonas). Preserva zonas existentes, completa
-// com defaults se aumenta; trunca se diminui.
-async function changePainelLayout(newLayout) {
+// 🆕 v2.52.54-F: Enter avança para próxima zona, ou Guarda se já estiver na última
+function _onZoneMessageKeydown(event, zoneIdx) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    // Sincroniza draft antes (caso oninput não tenha disparado por algum browser)
+    draftZoneMessageInput(zoneIdx, event.target.value);
+    const next = document.getElementById(`zone-msg-${zoneIdx + 1}`);
+    if (next) {
+        next.focus();
+        next.select();
+    } else {
+        savePainelDraft();
+    }
+}
+
+// 🆕 v2.52.54: muda layout no DRAFT (1/2/3 zonas). Confirmação ao reduzir.
+function changePainelLayout(newLayout) {
     if (!_selectedPainelId) return;
     if (![1, 2, 3].includes(newLayout)) return;
-    const p = paineisData.find(x => x.id === _selectedPainelId);
-    if (!p) return;
-    const { zonas: oldZonas } = _paineisGetLayoutZonas(p);
-    const newZonas = [];
-    for (let i = 0; i < newLayout; i++) {
-        newZonas.push(oldZonas[i] || { estado: 'verde', mensagem: 'OK' });
+    const d = _painelEnsureDraft();
+    if (!d) return;
+    if (newLayout === d.layout) return;
+
+    // 🆕 v2.52.54-C: confirmação ao reduzir
+    if (newLayout < d.layout) {
+        const zonasDescartadas = d.zonas.slice(newLayout);
+        const haConteudo = zonasDescartadas.some(z => (z.mensagem || '').trim() && z.mensagem !== 'OK');
+        const aviso = haConteudo
+            ? `Vais descartar as Zonas ${newLayout + 1}${newLayout < 2 ? '/2/3' : '/3'} (têm conteúdo). Continuar?`
+            : `Reduzir para ${newLayout} zona(s)?`;
+        if (!confirm(aviso)) return;
     }
-    await _applyPanelChange(_selectedPainelId, newLayout, newZonas);
+
+    // Preserva o que cabe, completa com defaults se aumenta
+    while (d.zonas.length < newLayout) d.zonas.push({ estado: 'verde', mensagem: 'OK' });
+    d.zonas = d.zonas.slice(0, newLayout);
+    d.layout = newLayout;
+    _refreshPainelDetailFromCache();
 }
 
-// 🆕 v2.52.53: muda apenas o estado de UMA zona, mantém mensagem
-async function applyZoneState(zoneIdx, newState) {
-    if (!_selectedPainelId) return;
-    const p = paineisData.find(x => x.id === _selectedPainelId);
-    if (!p) return;
-    const { layout, zonas } = _paineisGetLayoutZonas(p);
-    if (zoneIdx < 0 || zoneIdx >= layout) return;
-    const newZonas = zonas.map((z, i) => i === zoneIdx ? { ...z, estado: newState } : z);
-    await _applyPanelChange(_selectedPainelId, layout, newZonas);
+// 🆕 v2.52.54: muda estado de UMA zona no draft (apenas)
+function draftZoneState(zoneIdx, newState) {
+    const d = _painelEnsureDraft();
+    if (!d || zoneIdx < 0 || zoneIdx >= d.layout) return;
+    d.zonas[zoneIdx].estado = newState;
+    _refreshPainelDetailFromCache();
 }
 
-// 🆕 v2.52.53: muda apenas a mensagem de UMA zona, mantém estado
-async function applyZoneMessage(zoneIdx) {
+// 🆕 v2.52.54: muda mensagem de UMA zona no draft (via oninput).
+// IMPORTANTE: NÃO re-render do input (perde cursor). Só preview + action bar.
+function draftZoneMessageInput(zoneIdx, newValue) {
+    const d = _painelEnsureDraft();
+    if (!d || zoneIdx < 0 || zoneIdx >= d.layout) return;
+    d.zonas[zoneIdx].mensagem = newValue;
+    // Update apenas o preview + action bar (não os editors, senão o input perde focus)
+    _painelUpdatePreviewOnly();
+    _painelUpdateDraftActionBar();
+}
+
+// 🆕 v2.52.54: re-render só do preview visual no header (chamado durante typing)
+function _painelUpdatePreviewOnly() {
+    const d = _painelDraft;
+    if (!d) return;
+    const preview = document.getElementById('painel-detail-zones-preview');
+    if (!preview) return;
+    preview.innerHTML = d.zonas.map(z => {
+        const sc = _PAINEIS_STATE_COLORS[z.estado] || { bg: '#999', fg: '#fff' };
+        return `<div style="flex:1;background:${sc.bg};color:${sc.fg};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;">${_paineisEscape(z.mensagem || '—')}</div>`;
+    }).join('');
+}
+
+// 🆕 v2.52.54-B: copia Zona 1 para todas
+function applyZone1ToAll() {
+    const d = _painelEnsureDraft();
+    if (!d || d.layout < 2) return;
+    const z1 = d.zonas[0];
+    for (let i = 1; i < d.layout; i++) {
+        d.zonas[i] = { estado: z1.estado, mensagem: z1.mensagem };
+    }
+    _refreshPainelDetailFromCache();
+}
+
+// 🆕 v2.52.54: commit do draft à BD (1 escrita, 1 entrada no histórico)
+async function savePainelDraft() {
     if (!_selectedPainelId) return;
-    const input = document.getElementById(`zone-msg-${zoneIdx}`);
-    if (!input) return;
-    const msg = (input.value || '').trim();
-    const p = paineisData.find(x => x.id === _selectedPainelId);
-    if (!p) return;
-    const { layout, zonas } = _paineisGetLayoutZonas(p);
-    if (zoneIdx < 0 || zoneIdx >= layout) return;
-    const newZonas = zonas.map((z, i) => i === zoneIdx ? { ...z, mensagem: msg } : z);
-    await _applyPanelChange(_selectedPainelId, layout, newZonas);
+    if (!_painelDraftDirty()) {
+        closePainelDetail();
+        return;
+    }
+    const d = _painelDraft;
+    await _applyPanelChange(_selectedPainelId, d.layout, d.zonas);
+    // Re-baseline o draft (agora coincide com o que foi gravado)
+    _painelDraftBase = JSON.stringify(_painelDraft);
+    _painelUpdateDraftActionBar();
+}
+
+// 🆕 v2.52.54: descarta as alterações pendentes — restaura do cache
+function discardPainelDraft() {
+    if (!_painelDraftDirty()) return;
+    if (!confirm('Descartar as alterações pendentes?')) return;
+    _painelDraft = null;
+    _painelDraftBase = null;
+    _painelEnsureDraft();
+    _refreshPainelDetailFromCache();
+    // 🆕 v2.52.54-F: re-foco
+    setTimeout(() => {
+        const first = document.getElementById('zone-msg-0');
+        if (first) { first.focus(); first.select(); }
+    }, 50);
 }
 
 // 🆕 v2.52.53: central — aplica layout + zonas inteiros à BD com optimistic UI
@@ -9775,22 +9946,47 @@ function renderPainelPresetsRow() {
     }).join('');
 }
 
-async function applyPreset(presetId) {
+// 🆕 v2.52.54-D: preset respeita o target zone selector em multi-zona
+function applyPreset(presetId) {
     if (!_selectedPainelId) return;
     const pr = paineisPresetsData.find(x => x.id === presetId);
     if (!pr) {
         showToast('❌ Preset não encontrado', 'error');
         return;
     }
-    // 🆕 v2.52.53: preset aplica como 1 zona única ao painel. Multi-zona é manual.
-    // Se o preset já tem zonas (futuro), respeita; caso contrário usa estado/mensagem legacy.
-    let newLayout = 1;
-    let newZonas = [{ estado: pr.estado, mensagem: pr.mensagem }];
-    if (Array.isArray(pr.zonas) && pr.zonas.length > 0) {
-        newLayout = Math.max(1, Math.min(3, pr.layout || pr.zonas.length));
-        newZonas = pr.zonas.slice(0, newLayout);
+    const d = _painelEnsureDraft();
+    if (!d) return;
+
+    const presetZone = { estado: pr.estado, mensagem: pr.mensagem };
+
+    // Em 1-zona ou se o preset tem várias zonas próprias, comportamento legacy
+    if (d.layout === 1 || (Array.isArray(pr.zonas) && pr.zonas.length > 1)) {
+        const newLayout = Math.max(1, Math.min(3, pr.layout || (Array.isArray(pr.zonas) ? pr.zonas.length : 1)));
+        const newZonas = Array.isArray(pr.zonas) && pr.zonas.length > 0
+            ? pr.zonas.slice(0, newLayout)
+            : [presetZone];
+        d.layout = newLayout;
+        d.zonas = newZonas.map(z => ({ estado: z.estado, mensagem: z.mensagem }));
+        _refreshPainelDetailFromCache();
+        return;
     }
-    await _applyPanelChange(_selectedPainelId, newLayout, newZonas);
+
+    // Multi-zona: ler target zone selector
+    const targetSel = document.getElementById('painel-preset-target');
+    const target = targetSel ? targetSel.value : 'zone-0';
+
+    if (target === 'reset') {
+        d.layout = 1;
+        d.zonas = [presetZone];
+    } else if (target === 'all') {
+        for (let i = 0; i < d.layout; i++) d.zonas[i] = { ...presetZone };
+    } else if (target.startsWith('zone-')) {
+        const idx = parseInt(target.split('-')[1], 10);
+        if (!isNaN(idx) && idx >= 0 && idx < d.layout) {
+            d.zonas[idx] = { ...presetZone };
+        }
+    }
+    _refreshPainelDetailFromCache();
 }
 
 // --- Histórico ---
