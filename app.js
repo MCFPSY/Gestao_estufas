@@ -1211,10 +1211,11 @@ function openNewSecagemModal(estufaId, date) {
     
     updateModalSidebar(estufaId || 1);
     calculateEndTime();
-    
-    // Limpar matriz
-    loadMatrixData([]);
-    
+
+    // 🆕 v2.52.56: carregar lista de cargas hoje/amanhã antes da matriz para
+    // que os dropdowns vazios já apareçam com as opções correctas
+    loadAvailableCargas().finally(() => loadMatrixData([]));
+
     document.getElementById('btn-delete').classList.add('d-none');
     openModal();
 }
@@ -1242,8 +1243,8 @@ function editSecagem(sec) {
     updateModalSidebar(sec.estufa_id);
     calculateEndTime();
 
-    // Carregar dados na matriz
-    loadMatrixData(sec.cargo || []);
+    // 🆕 v2.52.56: cargas hoje/amanhã primeiro, depois render dos dropdowns nas células
+    loadAvailableCargas().finally(() => loadMatrixData(sec.cargo || []));
 
     // Botão eliminar: só visível em modo edição
     const delBtn = document.getElementById('btn-delete');
@@ -1902,7 +1903,8 @@ function fillSelectedCells() {
             if (footer) {
                 footer.classList.remove('selected');
                 footer.classList.add('filled');
-                footer.textContent = tipo;
+                // 🆕 v2.52.56: innerHTML em vez de textContent + dropdown vazio (sem carga ainda)
+                footer.innerHTML = `<div class="cell-tipo" style="font-size:13px;font-weight:700;color:white;">${tipo}</div>${_renderCellCargaSelector(cellId, null, null)}`;
                 matrixData[cellId] = { tipo, isFooter: true };
             }
         });
@@ -1924,21 +1926,22 @@ function fillSelectedCells() {
         if (cell) {
             cell.classList.remove('selected');
             cell.classList.add('filled');
-            
+
             // Aplicar cor de fundo do bloco
             cell.style.backgroundColor = blockColor;
-            
-            // Adicionar texto com estilo inline para garantir tamanho
-            cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>`;
-            
+
+            // 🆕 v2.52.56: cell-tipo + dropdown de nº viagem (vazio em fill novo)
+            cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>${_renderCellCargaSelector(cellId, null, null)}`;
+
             // Armazenar dados com informações do bloco
-            matrixData[cellId] = { 
+            matrixData[cellId] = {
                 tipo,
                 blockId,      // ID do bloco (para agrupar células)
                 blockColor,   // Cor do bloco
                 blockCells: [...selectedCells] // Todas as células do bloco
+                // carga_date / carga_nviagem ficam undefined até user escolher do dropdown
             };
-            
+
             console.log(`   ✅ ${cellId}: filled com cor ${blockColor}`);
         }
     });
@@ -2203,6 +2206,100 @@ function clearSelectedCells() {
     showToast('Células limpas', 'success');
 }
 
+// ===================================================================
+// 🆕 v2.52.56: dropdown de carga (nº viagem) por célula da matriz
+// Lista cargas de HOJE + AMANHÃ do Mapa de Encomendas. Filtra fora
+// cargas sem nviagem e sem transp. Várias células podem ligar à mesma.
+// Schema: secagem_cargo.carga_date + carga_nviagem (texto, sem FK).
+// ===================================================================
+let _availableCargas = []; // populada por loadAvailableCargas()
+
+async function loadAvailableCargas() {
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    const monthNames = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+    const fmt = d => `${String(d.getDate()).padStart(2,'0')}/${monthNames[d.getMonth()]}`;
+    const dates = [fmt(today), fmt(tomorrow)];
+    const months = Array.from(new Set([monthNames[today.getMonth()], monthNames[tomorrow.getMonth()]]));
+    const years  = Array.from(new Set([today.getFullYear(), tomorrow.getFullYear()]));
+
+    try {
+        const { data, error } = await db.from('mapa_encomendas')
+            .select('date, nviagem, transp, month, year')
+            .in('month', months)
+            .in('year', years)
+            .in('date', dates);
+        if (error) throw error;
+
+        // Dedupe por (date, nviagem). Filtra incompletas.
+        const seen = new Set();
+        _availableCargas = (data || [])
+            .filter(r => {
+                const nv = (r.nviagem || '').trim();
+                const tr = (r.transp || '').trim();
+                if (!nv || !tr) return false;
+                const key = `${r.date}|${nv}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            })
+            .map(r => ({ date: r.date, nviagem: (r.nviagem || '').trim() }))
+            .sort((a, b) => {
+                if (a.date !== b.date) return dates.indexOf(a.date) - dates.indexOf(b.date);
+                return a.nviagem.localeCompare(b.nviagem, 'pt', { numeric: true });
+            });
+
+        console.log(`📦 [carga selector] ${_availableCargas.length} carga(s) hoje/amanhã disponíveis`);
+    } catch (err) {
+        console.error('❌ Falhou load de cargas para dropdown:', err);
+        _availableCargas = [];
+    }
+}
+
+// Gera <select> compacto para uma célula. Pre-selecciona se já tem carga ligada.
+function _renderCellCargaSelector(cellId, currentDate, currentNviagem) {
+    const opts = ['<option value="">— sem viagem —</option>'];
+
+    // Se a carga linkada já não existe na lista (ex: foi apagada), mostra-a como órfã
+    const linkedKey = (currentDate && currentNviagem) ? `${currentDate}|${currentNviagem}` : null;
+    const linkedExists = linkedKey && _availableCargas.some(c => `${c.date}|${c.nviagem}` === linkedKey);
+    if (linkedKey && !linkedExists) {
+        opts.push(`<option value="${linkedKey}" selected>NV ${_paineisEscape(currentNviagem)} (apagada)</option>`);
+    }
+
+    _availableCargas.forEach(c => {
+        const val = `${c.date}|${c.nviagem}`;
+        const sel = (val === linkedKey) ? ' selected' : '';
+        opts.push(`<option value="${val}"${sel}>NV ${c.nviagem}</option>`);
+    });
+
+    // onclick stopPropagation: evita disparar selectCell quando carregas no dropdown
+    return `<select class="cell-nviagem-select" data-cell-id="${cellId}"
+        onclick="event.stopPropagation()"
+        onmousedown="event.stopPropagation()"
+        onchange="onCellCargaChange('${cellId}', this.value)"
+        title="Ligar a uma carga de hoje ou amanhã (nº viagem)"
+        style="display:block;margin:4px auto 0 auto;font-size:11px;padding:1px 4px;border:none;background:rgba(0,0,0,0.18);color:white;border-radius:3px;font-weight:600;cursor:pointer;max-width:95%;text-align:center;text-overflow:ellipsis;">
+        ${opts.join('')}
+    </select>`;
+}
+
+// Quando o utilizador escolhe (ou limpa) uma viagem numa célula
+function onCellCargaChange(cellId, value) {
+    if (!matrixData[cellId]) return;
+    if (!value) {
+        delete matrixData[cellId].carga_date;
+        delete matrixData[cellId].carga_nviagem;
+        console.log(`📦 ${cellId} → carga LIMPA`);
+    } else {
+        const [date, nviagem] = value.split('|');
+        matrixData[cellId].carga_date = date;
+        matrixData[cellId].carga_nviagem = nviagem;
+        console.log(`📦 ${cellId} → NV ${nviagem} (${date})`);
+    }
+}
+
 function loadMatrixData(cargoArray) {
     // 🎯 v2.50.0: Limpar matriz e resetar índice de cores
     matrixData = {};
@@ -2244,8 +2341,13 @@ function loadMatrixData(cargoArray) {
                 const footer = document.getElementById(`cargo-${footerId}`);
                 if (footer) {
                     footer.classList.add('filled');
-                    footer.textContent = tipo;
-                    matrixData[footerId] = { tipo, isFooter: true };
+                    // 🆕 v2.52.56: textContent → innerHTML para injectar dropdown da viagem
+                    footer.innerHTML = `<div class="cell-tipo" style="font-size:13px;font-weight:700;color:white;">${tipo}</div>${_renderCellCargaSelector(footerId, item.carga_date, item.carga_nviagem)}`;
+                    matrixData[footerId] = {
+                        tipo, isFooter: true,
+                        carga_date: item.carga_date || undefined,
+                        carga_nviagem: item.carga_nviagem || undefined,
+                    };
                 }
                 return;
             }
@@ -2279,13 +2381,17 @@ function loadMatrixData(cargoArray) {
                 if (cell) {
                     cell.classList.add('filled');
                     cell.style.backgroundColor = blockColor; // Aplicar cor
-                    cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>`;
+                    // 🆕 v2.52.56: cell-tipo + dropdown de nº viagem (mais pequeno)
+                    cell.innerHTML = `<div class="cell-tipo" style="font-size: 17px; font-weight: 700; color: white;">${tipo}</div>${_renderCellCargaSelector(cellId, item.carga_date, item.carga_nviagem)}`;
 
                     matrixData[cellId] = {
                         tipo,
                         blockId,
                         blockColor,
-                        blockCells: cellIds // ← já filtrado, sem células de blocos anteriores
+                        blockCells: cellIds, // ← já filtrado, sem células de blocos anteriores
+                        // 🆕 v2.52.56: ligação à carga (igual para todas as células do bloco)
+                        carga_date: item.carga_date || undefined,
+                        carga_nviagem: item.carga_nviagem || undefined,
                     };
                 }
             });
@@ -2311,7 +2417,10 @@ function getMatrixCargoData() {
             if (!processedCells.has(cellId)) {
                 result.push({
                     posicao: cellId, // 'footer-1' ou 'footer-2'
-                    tipo_palete: data.tipo
+                    tipo_palete: data.tipo,
+                    // 🆕 v2.52.56: ligação à carga (opcional)
+                    carga_date: data.carga_date || null,
+                    carga_nviagem: data.carga_nviagem || null,
                 });
                 processedCells.add(cellId);
                 console.log(`   💾 BD: ${cellId} → "${data.tipo}"`);
@@ -2343,9 +2452,12 @@ function getMatrixCargoData() {
         
         result.push({
             posicao: blockCells.join(','), // Ex: "7-1,7-2" ou "8-1"
-            tipo_palete: data.tipo
+            tipo_palete: data.tipo,
+            // 🆕 v2.52.56: ligação à carga, herdada da primeira célula do bloco
+            carga_date: data.carga_date || null,
+            carga_nviagem: data.carga_nviagem || null,
         });
-        
+
         console.log(`   💾 BD: bloco ${data.blockId || 'único'} → ${blockCells.length} célula(s): ${blockCells.join(',')}`);
     });
     
