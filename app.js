@@ -1903,8 +1903,11 @@ function fillSelectedCells() {
             if (footer) {
                 footer.classList.remove('selected');
                 footer.classList.add('filled');
-                // 🆕 v2.52.56: innerHTML em vez de textContent + dropdown vazio (sem carga ainda)
-                footer.innerHTML = `<div class="cell-tipo" style="font-size:13px;font-weight:700;color:white;">${tipo}</div>${_renderCellCargaSelector(cellId, null, null)}`;
+                // 🆕 v2.52.56/57: innerHTML + flex column + isCompact para footers
+                footer.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;width:100%;height:100%;line-height:1.1;">
+                    <div class="cell-tipo" style="font-size:11px;font-weight:700;color:white;white-space:nowrap;">${tipo}</div>
+                    ${_renderCellCargaSelector(cellId, null, null, true)}
+                </div>`;
                 matrixData[cellId] = { tipo, isFooter: true };
             }
         });
@@ -2258,7 +2261,8 @@ async function loadAvailableCargas() {
 }
 
 // Gera <select> compacto para uma célula. Pre-selecciona se já tem carga ligada.
-function _renderCellCargaSelector(cellId, currentDate, currentNviagem) {
+// 🆕 v2.52.57: isCompact reduz ainda mais para células footer estreitas.
+function _renderCellCargaSelector(cellId, currentDate, currentNviagem, isCompact) {
     const opts = ['<option value="">— sem viagem —</option>'];
 
     // Se a carga linkada já não existe na lista (ex: foi apagada), mostra-a como órfã
@@ -2274,13 +2278,17 @@ function _renderCellCargaSelector(cellId, currentDate, currentNviagem) {
         opts.push(`<option value="${val}"${sel}>NV ${c.nviagem}</option>`);
     });
 
+    const fontSize = isCompact ? '9px' : '11px';
+    const padding  = isCompact ? '0 3px' : '1px 4px';
+    const maxWidth = isCompact ? '70px'  : '95%';
+
     // onclick stopPropagation: evita disparar selectCell quando carregas no dropdown
     return `<select class="cell-nviagem-select" data-cell-id="${cellId}"
         onclick="event.stopPropagation()"
         onmousedown="event.stopPropagation()"
         onchange="onCellCargaChange('${cellId}', this.value)"
         title="Ligar a uma carga de hoje ou amanhã (nº viagem)"
-        style="display:block;margin:4px auto 0 auto;font-size:11px;padding:1px 4px;border:none;background:rgba(0,0,0,0.18);color:white;border-radius:3px;font-weight:600;cursor:pointer;max-width:95%;text-align:center;text-overflow:ellipsis;">
+        style="display:block;margin:2px auto 0 auto;font-size:${fontSize};padding:${padding};border:none;background:rgba(0,0,0,0.22);color:white;border-radius:3px;font-weight:600;cursor:pointer;max-width:${maxWidth};text-align:center;text-overflow:ellipsis;overflow:hidden;">
         ${opts.join('')}
     </select>`;
 }
@@ -2342,7 +2350,11 @@ function loadMatrixData(cargoArray) {
                 if (footer) {
                     footer.classList.add('filled');
                     // 🆕 v2.52.56: textContent → innerHTML para injectar dropdown da viagem
-                    footer.innerHTML = `<div class="cell-tipo" style="font-size:13px;font-weight:700;color:white;">${tipo}</div>${_renderCellCargaSelector(footerId, item.carga_date, item.carga_nviagem)}`;
+                    // 🆕 v2.52.57: wrap em flex column + isCompact para footers estreitos
+                    footer.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;width:100%;height:100%;line-height:1.1;">
+                        <div class="cell-tipo" style="font-size:11px;font-weight:700;color:white;white-space:nowrap;">${tipo}</div>
+                        ${_renderCellCargaSelector(footerId, item.carga_date, item.carga_nviagem, true)}
+                    </div>`;
                     matrixData[footerId] = {
                         tipo, isFooter: true,
                         carga_date: item.carga_date || undefined,
@@ -7258,13 +7270,76 @@ function showCargaDetails(carga, dayName, dateStr) {
         obsContainer.style.display = 'none';
     }
     
+    // 🆕 v2.52.57: secagens ligadas a esta viagem (query a secagem_cargo)
+    _loadSecagensLinkedToCarga(carga.date, carga.nviagem);
+
     // Mostrar modal
     modal.style.display = 'flex';
-    
+
     // Animação de entrada
     setTimeout(() => {
         modal.classList.add('active');
     }, 10);
+}
+
+// 🆕 v2.52.57: busca em secagem_cargo as células ligadas a (carga_date, carga_nviagem)
+// e mostra as secagens correspondentes no detalhe da carga. Read-only.
+async function _loadSecagensLinkedToCarga(cargaDate, cargaNviagem) {
+    const container = document.getElementById('carga-secagens-container');
+    const list = document.getElementById('carga-secagens-list');
+    if (!container || !list) return;
+
+    // Sem nviagem ou sem date → não procura, esconde a secção
+    if (!cargaDate || !cargaNviagem) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'block';
+    list.innerHTML = '<span style="color:#999;">⏳ A carregar...</span>';
+
+    try {
+        const { data, error } = await db
+            .from('secagem_cargo')
+            .select('tipo_palete, posicao, secagem_id, secagens!inner(id, codigo, estufa_id, start_time, end_time, tipo_secagem, qtd_total)')
+            .eq('carga_date', cargaDate)
+            .eq('carga_nviagem', String(cargaNviagem));
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+            container.style.display = 'none';
+            return;
+        }
+
+        // Agrupar por secagem (mesma secagem pode ter várias células linkadas)
+        const bySecagem = new Map();
+        data.forEach(row => {
+            const s = row.secagens;
+            if (!s) return;
+            if (!bySecagem.has(s.id)) {
+                bySecagem.set(s.id, { secagem: s, items: [] });
+            }
+            bySecagem.get(s.id).items.push({ tipo: row.tipo_palete, posicao: row.posicao });
+        });
+
+        list.innerHTML = Array.from(bySecagem.values()).map(({ secagem, items }) => {
+            const codigo = secagem.codigo || `SEC_E${secagem.estufa_id}_???`;
+            const start = secagem.start_time ? new Date(secagem.start_time).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+            const end = secagem.end_time ? new Date(secagem.end_time).toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+            const tipoSec = secagem.tipo_secagem || 'Dry';
+            const itemsStr = items.map(it => `<strong>${it.tipo}</strong>`).join(' · ');
+            return `<div style="padding:8px 10px;background:#fff;border-radius:6px;margin-bottom:6px;border:1px solid #D6E4F5;">
+                <div style="font-weight:700;color:#007AFF;font-size:13px;">${codigo} · Estufa ${secagem.estufa_id} · ${tipoSec}</div>
+                <div style="font-size:11px;color:#666;margin:2px 0 4px 0;">${start} → ${end}</div>
+                <div style="font-size:12px;">📦 ${itemsStr}</div>
+            </div>`;
+        }).join('');
+
+    } catch (err) {
+        console.error('❌ Erro a carregar secagens ligadas à carga:', err);
+        list.innerHTML = `<span style="color:#FF3B30;">Erro: ${err.message}</span>`;
+    }
 }
 
 function closeCargaModal() {
