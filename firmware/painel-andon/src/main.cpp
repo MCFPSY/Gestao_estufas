@@ -1,34 +1,28 @@
 // ============================================================
-// PSY/MCF Painel Andon — firmware v2.52.58 (commit 1/5)
+// PSY/MCF Painel Andon — firmware v2.52.59 (commit 2/5)
 //
-// Smoke test do painel HUB75. Este sketch ainda NÃO liga ao WiFi
-// nem ao Supabase. Serve apenas para:
-//   1) Confirmar que o painel acende com o pinout HD-WF2
-//   2) Confirmar que conseguimos compilar + flashar
-//   3) Confirmar que o driver do chip do painel está bem escolhido
+// Acrescenta sobre o v2.52.58:
+//   - WiFi manager com reconnect (módulo wifi_manager)
+//   - Persistência do último estado em NVS (módulo state_store)
+//   - Renderização inicial a partir do que está em NVS
 //
-// Hardware: Huidu HD-WF2 (ESP32-S3, 8MB)
-// Painel:   96×32 pixels (3 módulos P10 RGB de 32×32 em série)
-//
-// Próximos passos:
-//   v2.52.59 → WiFi manager + persistência NVS
-//   v2.52.60 → cliente Supabase Realtime (Phoenix Channels)
-//   v2.52.61 → render real de 3 zonas a partir do estado da BD
-//   v2.52.62 → mock client Python + OTA
+// Ainda NÃO liga ao Supabase Realtime — vem no v2.52.60.
+// Por enquanto o painel mostra o último estado guardado em flash, ou
+// "verde / OK" se nunca foi gravado.
 // ============================================================
 
 #include <Arduino.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+#include "config.h"          // gerado por cada utilizador a partir do .example
+#include "wifi_manager.h"
+#include "state_store.h"
 
 // === CONFIGURAÇÃO FÍSICA DO PAINEL ===
-// 96x32 = 3 módulos de 32x32 em série
 static const int PANEL_RES_X = 32;
 static const int PANEL_RES_Y = 32;
-static const int PANEL_CHAIN = 3;
+static const int PANEL_CHAIN = 3;  // 96x32 total
 
 // === PINOUT HD-WF2 (ESP32-S3) ===
-// Mapeamento documentado pela Huidu para a controladora HD-WF2.
-// Referência: https://github.com/mrcodetastic/HD-WF1-WF2-LED-MatrixPanel-DMA
 static const int R1_PIN  = 2;
 static const int G1_PIN  = 6;
 static const int B1_PIN  = 10;
@@ -45,6 +39,61 @@ static const int OE_PIN  = 35;
 static const int CLK_PIN = 34;
 
 MatrixPanel_I2S_DMA *display = nullptr;
+StateStore::State    currentState;
+
+// --- Helpers de cor / render ---
+
+static uint16_t bgForEstado(const char* estado) {
+    if (!estado) return display->color565(120, 120, 120);
+    if (strcmp(estado, "verde") == 0)    return display->color565(0,   200, 0);
+    if (strcmp(estado, "amarelo") == 0)  return display->color565(255, 165, 0);
+    if (strcmp(estado, "vermelho") == 0) return display->color565(255, 0,   0);
+    return display->color565(120, 120, 120);
+}
+
+static uint16_t fgForEstado(const char* estado) {
+    // Amarelo + texto escuro lê-se melhor
+    if (estado && strcmp(estado, "amarelo") == 0) return display->color565(0, 0, 0);
+    return display->color565(255, 255, 255);
+}
+
+// Renderiza no painel o currentState. Texto centrado em cada zona.
+void renderState() {
+    if (!display) return;
+    const int TOTAL_W = PANEL_RES_X * PANEL_CHAIN;
+    const int H       = PANEL_RES_Y;
+    int layout = currentState.layout;
+    if (layout < 1) layout = 1;
+    if (layout > 3) layout = 3;
+    const int zoneW = TOTAL_W / layout;
+
+    display->clearScreen();
+    for (int i = 0; i < layout; i++) {
+        const auto& z = currentState.zonas[i];
+        int x0 = i * zoneW;
+        display->fillRect(x0, 0, zoneW, H, bgForEstado(z.estado));
+        display->setTextColor(fgForEstado(z.estado));
+        display->setTextSize(1);
+        // Bitmap font default: 6x8 px por caractere
+        int textW = (int)strlen(z.mensagem) * 6;
+        int x = x0 + (zoneW - textW) / 2;
+        int y = (H - 8) / 2;
+        if (x < x0 + 1) x = x0 + 1; // se não cabe, alinha à esquerda
+        display->setCursor(x, y);
+        display->print(z.mensagem);
+    }
+
+    Serial.print("[Render] layout=");
+    Serial.print(layout);
+    for (int i = 0; i < layout; i++) {
+        Serial.printf(" | Z%d=%s \"%s\"", i + 1,
+                      currentState.zonas[i].estado,
+                      currentState.zonas[i].mensagem);
+    }
+    Serial.println();
+}
+
+// --- Boot ---
 
 void setup() {
     Serial.begin(115200);
@@ -53,75 +102,53 @@ void setup() {
     Serial.println("======================================");
     Serial.print(" PSY/MCF Painel Andon — fw ");
     Serial.println(PAINEL_FW_VERSION);
-    Serial.println(" Smoke test do painel HUB75");
+    Serial.print(" Panel ID: "); Serial.println(PANEL_ID);
     Serial.println("======================================");
-    Serial.printf("Configuração: %dx%d (chain=%d) → total %d px\n",
-                  PANEL_RES_X, PANEL_RES_Y, PANEL_CHAIN,
-                  PANEL_RES_X * PANEL_CHAIN * PANEL_RES_Y);
 
+    // 1. Iniciar painel HUB75
     HUB75_I2S_CFG::i2s_pins pins = {
         R1_PIN, G1_PIN, B1_PIN,
         R2_PIN, G2_PIN, B2_PIN,
         A_PIN, B_PIN, C_PIN, D_PIN, E_PIN,
         LAT_PIN, OE_PIN, CLK_PIN
     };
-
     HUB75_I2S_CFG mxconfig(PANEL_RES_X, PANEL_RES_Y, PANEL_CHAIN, pins);
     mxconfig.clkphase = false;
-    // Chip driver do painel: se os pixels saírem corridos ou trocados,
-    // tentar SHIFT ou ICN2038S em vez de FM6126A.
-    mxconfig.driver = HUB75_I2S_CFG::FM6126A;
+    mxconfig.driver   = HUB75_I2S_CFG::FM6126A;
 
     display = new MatrixPanel_I2S_DMA(mxconfig);
     if (!display->begin()) {
-        Serial.println("❌ Falhou inicializar o painel — verifica pinout e alimentação");
-        return;
+        Serial.println("[Panel] ❌ Falhou inicializar — verifica hardware");
+    } else {
+        display->setBrightness8(180);
+        display->clearScreen();
+        Serial.println("[Panel] ✅ Inicializado");
     }
-    display->setBrightness8(180); // 0-255
-    display->clearScreen();
 
-    Serial.println("✅ Painel inicializado");
+    // 2. Carregar último estado do NVS e mostrar imediatamente
+    currentState = StateStore::load();
+    renderState();
 
-    // Quadro de arranque
-    display->fillScreen(display->color565(0, 80, 0));
-    display->setTextColor(display->color565(255, 255, 255));
-    display->setTextSize(1);
-    display->setCursor(8, 12);
-    display->print("PSY Andon");
-    delay(2000);
+    // 3. Iniciar WiFi (não bloqueia se falhar — tick() trata reconnect)
+    WifiManager::begin();
+
+    Serial.println("[Setup] ✅ Pronto. Próximo: v2.52.60 vai ligar ao Supabase.");
 }
 
-// === Smoke test: ciclo verde → amarelo → vermelho ===
-uint32_t lastChange = 0;
-int      colorStep  = 0;
+// --- Loop ---
+
+uint32_t lastStatusReport = 0;
 
 void loop() {
-    if (millis() - lastChange < 1500) return;
-    lastChange = millis();
+    WifiManager::tick();
 
-    display->clearScreen();
-    switch (colorStep % 3) {
-        case 0:
-            Serial.println("→ 🟢 Verde / OK");
-            display->fillScreen(display->color565(0, 200, 0));
-            display->setTextColor(display->color565(255, 255, 255));
-            display->setCursor(40, 12);
-            display->print("OK");
-            break;
-        case 1:
-            Serial.println("→ 🟡 Amarelo / ATENCAO");
-            display->fillScreen(display->color565(255, 165, 0));
-            display->setTextColor(display->color565(0, 0, 0));
-            display->setCursor(22, 12);
-            display->print("ATENCAO");
-            break;
-        case 2:
-            Serial.println("→ 🔴 Vermelho / AVARIA");
-            display->fillScreen(display->color565(255, 0, 0));
-            display->setTextColor(display->color565(255, 255, 255));
-            display->setCursor(28, 12);
-            display->print("AVARIA");
-            break;
+    // Status de debug cada 30s (sai na v2.52.62 quando estiver estável)
+    if (millis() - lastStatusReport > 30000) {
+        lastStatusReport = millis();
+        Serial.printf("[Loop] WiFi=%s IP=%s layout=%u v=%u\n",
+                      WifiManager::isConnected() ? "🟢" : "🔴",
+                      WifiManager::getLocalIP().c_str(),
+                      (unsigned)currentState.layout,
+                      (unsigned)currentState.version);
     }
-    colorStep++;
 }

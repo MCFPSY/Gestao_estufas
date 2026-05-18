@@ -1,0 +1,28 @@
+// ============================================================
+// config.h.example — TEMPLATE de configuração por painel
+//
+// COMO USAR:
+//   1. Copiar este ficheiro para include/config.h
+//   2. Editar os valores em baixo para cada painel
+//   3. Compilar e flashar
+//
+// IMPORTANTE: include/config.h está no .gitignore.
+// NUNCA commitar passwords / keys ao repo.
+// ============================================================
+
+#pragma once
+
+// === WiFi da fábrica onde este painel vai estar ===
+#define WIFI_SSID     "PSY-Producao"
+#define WIFI_PASSWORD "trocar-isto"
+
+// === Identidade deste painel ===
+// Tem de bater EXACTAMENTE com a coluna `id` da linha em paineis_andon
+// (BD Supabase) para a app saber qual painel atualizar.
+// Ex: "psy-posto-01", "psy-posto-02", ..., "mcf-linha-3"
+#define PANEL_ID "psy-posto-01"
+
+// === Supabase (usado a partir do v2.52.60) ===
+// Em v2.52.59 ainda não fazemos chamadas — podes deixar placeholder.
+#define SUPABASE_URL      "https://sawmdixlevjghlikvakv.supabase.co"
+#define SUPABASE_ANON_KEY "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.PLACEHOLDER"
