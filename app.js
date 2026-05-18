@@ -1,7 +1,7 @@
 // ===================================================================
 // PSY - Gestão de secagens, encomendas e cargas
-// Versão: v2.51.36i - HOTFIX MODALS + AUTO-REFRESH INDICATOR
-// Data: 25/03/2026 11:45
+// Versão: v2.52.64 - UPSERT+DELETE seletivo (elimina risco DELETE-all+INSERT-all multi-user)
+// Data: 18/05/2026
 // ===================================================================
 console.log('%c🔥 APP.JS v2.51.36N - MOVER MODAL PARA BODY 🔥', 'background: #FF3B30; color: white; font-size: 20px; font-weight: bold; padding: 10px;');
 console.log('%c📋 SOLUÇÃO: appendChild(modal) move para body (fora de tabs)', 'background: #34C759; color: white; font-size: 16px; padding: 5px;');
@@ -4912,13 +4912,10 @@ function hasOtherActiveUsers() {
 function isEchoFromOwnSave() {
     if (isSaving || isSavingAll) return true;
     if (Date.now() < _savingAllGraceUntil) return true;
-    // NOTA: a guarda anterior "!hasOtherActiveUsers() → return true" foi removida
-    // (v2.52.63). Era um falso positivo grave: se Person X inseria uma linha e
-    // fechava o browser, o Presence ficava vazio, e QUALQUER evento Realtime
-    // subsequente era silenciado como "eco" — mesmo sendo uma alteração legítima
-    // de X que ainda não tinha chegado à memória local. O save seguinte de
-    // qualquer utilizador apagava então as linhas de X sem registo no histórico.
-    // As duas guardas acima (isSavingAll + grace period) são suficientes.
+    // 🔥 v2.52.32: defesa em profundidade — se não há outros users online, o
+    // event é forçosamente eco do próprio save (nenhum outro browser existe
+    // para o originar). Presence é a fonte de verdade confiável aqui.
+    if (!hasOtherActiveUsers()) return true;
     return false;
 }
 
@@ -5216,47 +5213,39 @@ async function _saveAllRowsImpl() {
             console.warn(`🛡️ ATENÇÃO: Mês mudou durante preparação! Era ${snapMonth}/${snapYear}, agora é ${currentMonth}/${currentYear}. Continuando com snapshot original.`);
         }
 
-        // 3. Apagar linhas do mês (usando snapshot)
+        // 3. UPSERT todas as linhas — sem janela de dados em falta entre DELETE e INSERT.
+        // v2.52.64: substituiu o padrão DELETE-all+INSERT-all que, com múltiplos utilizadores,
+        // podia apagar dados escritos por outro browser durante a janela entre os dois passos.
+        // Requer UNIQUE constraint em (month, year, row_order).
+        const BATCH = 500;
+        for (let i = 0; i < rows.length; i += BATCH) {
+            const chunk = rows.slice(i, i + BATCH);
+            const { error: upsertError } = await db
+                .from('mapa_encomendas')
+                .upsert(chunk, { onConflict: 'month,year,row_order' });
+
+            if (upsertError) {
+                console.error(`❌ Erro ao upsert lote ${i}–${i + chunk.length}:`, upsertError);
+                if (typeof showToast === 'function') {
+                    showToast('❌ Erro ao salvar. Tenta novamente.', 'error');
+                }
+                throw upsertError;
+            }
+        }
+
+        // 4. Apagar apenas linhas que o snapshot já não inclui (linhas removidas pelo utilizador).
+        // Nunca apaga linhas de row_orders fora do snapshot — preserva edições concorrentes.
+        const keepRowOrders = rows.map(r => r.row_order);
         const { error: deleteError } = await db
             .from('mapa_encomendas')
             .delete()
             .eq('month', snapMonth)
-            .eq('year', snapYear);
+            .eq('year', snapYear)
+            .not('row_order', 'in', `(${keepRowOrders.join(',')})`);
 
-        // 🔥 v2.52.21: se o DELETE falhar, ABORTAR. Não fazer INSERT em seguida —
-        // isso antes duplicava tudo quando o DELETE silenciosamente falhava.
-        // A UNIQUE constraint agora também trava qualquer tentativa de duplicar,
-        // mas ser explícito aqui evita pedidos inúteis à BD.
         if (deleteError) {
-            console.error('❌ Erro ao apagar linhas do mês — a ABORTAR o save para não criar duplicados:', deleteError);
-            if (typeof showToast === 'function') {
-                showToast('❌ Erro ao salvar: DELETE falhou. Tenta novamente.', 'error');
-            }
+            console.error('❌ Erro ao apagar linhas obsoletas:', deleteError);
             throw deleteError;
-        }
-
-        // 4. Inserir IMEDIATAMENTE (rows já preparados, sem re-ler currentMonth)
-        if (rows.length > 0) {
-            // Inserir em lotes de 500 para evitar timeout
-            const BATCH = 500;
-            for (let i = 0; i < rows.length; i += BATCH) {
-                const chunk = rows.slice(i, i + BATCH);
-                const { error: insertError } = await db
-                    .from('mapa_encomendas')
-                    .insert(chunk);
-
-                if (insertError) {
-                    console.error(`❌ Erro ao inserir lote ${i}-${i + chunk.length}:`, insertError);
-                    // Se for violação de UNIQUE constraint (23505), é sinal de que
-                    // havia saves concorrentes ou estado inconsistente.
-                    if (insertError.code === '23505') {
-                        if (typeof showToast === 'function') {
-                            showToast('⚠️ Conflito de dados detectado — outro save em curso? Recarrega a página.', 'error');
-                        }
-                    }
-                    throw insertError;
-                }
-            }
         }
 
         console.log(`✅ Todas as ${rows.length} linhas salvas para ${snapMonth}/${snapYear}`);
