@@ -15,18 +15,19 @@ app web.
 
 ## Estado actual
 
-**v2.52.61 (commit 4/5)**: Render polido — fonte size 2 (12×16 px)
-quando cabe, fallback a size 1 + truncamento se a mensagem é maior
-que a zona. Pixels de "leftover" da divisão dão à última zona (não
-ficam por preencher na orla direita).
+**v2.52.62 (commit 5/5) — FINAL**: OTA via WiFi (actualiza firmware sem
+desmontar o painel) + mock client Python (testar sem hardware) + docs.
 
 | Commit | Versão | Conteúdo |
 |---|---|---|
 | 1 | v2.52.58 | ✅ Setup PlatformIO + smoke test |
 | 2 | v2.52.59 | ✅ WiFi manager + persistência NVS |
 | 3 | v2.52.60 | ✅ Cliente Supabase Realtime (Phoenix Channels) |
-| 4 | v2.52.61 | ✅ Render polido (fontes adaptadas + truncamento) (este) |
-| 5 | v2.52.62 | Mock client Python + OTA + docs finais |
+| 4 | v2.52.61 | ✅ Render polido (fontes adaptadas + truncamento) |
+| 5 | v2.52.62 | ✅ OTA + mock Python + docs (este) |
+
+Sistema completo. A partir daqui o firmware funciona end-to-end com a
+app web. Próximos commits seriam bug fixes ou novas features.
 
 ## Instalação (uma vez)
 
@@ -80,6 +81,42 @@ pio run -t upload
 # Ver logs em tempo real (Ctrl+C para sair)
 pio device monitor
 ```
+
+### Passo 3 — Actualizações posteriores via OTA (sem cabo)
+
+A partir do segundo flash, podes actualizar via WiFi (o painel fica
+no ar como `psy-posto-01.local` ou pelo IP):
+
+```bash
+# Por IP (obtido no boot do painel via serial)
+pio run -t upload --upload-port 192.168.1.55
+
+# Por hostname (se mDNS funciona na tua rede)
+pio run -t upload --upload-port psy-posto-01.local
+```
+
+O painel mostra o último estado enquanto está a receber. No fim reinicia
+automaticamente e volta a aparecer com o novo firmware.
+
+## Testar sem hardware (mock Python)
+
+Antes do painel chegar, podes simular tudo o que o firmware faria:
+
+```bash
+cd firmware/painel-andon/test
+pip install supabase
+PANEL_ID=psy-posto-01 python mock_panel.py
+```
+
+O script subscreve o Supabase Realtime e imprime no terminal uma
+representação ASCII colorida do que o painel REAL mostraria. Faz
+alterações na app web (tab "Organização Pavilhões") e vê em <1 segundo
+a actualização no terminal.
+
+Útil para:
+- Validar o fluxo end-to-end antes do hardware chegar
+- Debug do payload Realtime (vês o JSON exacto)
+- Demos / formação sem hardware
 
 No monitor série deves ver:
 1. Banner "PSY/MCF Painel Andon — fw v2.52.60" + Panel ID

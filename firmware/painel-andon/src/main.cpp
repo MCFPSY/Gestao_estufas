@@ -1,24 +1,52 @@
 // ============================================================
-// PSY/MCF Painel Andon — firmware v2.52.61 (commit 4/5)
+// PSY/MCF Painel Andon — firmware v2.52.62 (commit 5/5) — FINAL
 //
-// Acrescenta sobre v2.52.60:
-//   - Módulo panel_renderer dedicado, com:
-//       • Fonte size 2 (12×16 px) quando texto cabe — muito mais legível
-//       • Fallback automático para size 1 quando não cabe
-//       • Truncamento com "." se mensagem é maior que a zona
-//       • Pixels extras dados à última zona (96/3 = 32×3, 96/2 = 48×2, OK)
-//   - main.cpp simplificado: delega ao panel_renderer.render()
+// Acrescenta sobre v2.52.61:
+//   - ArduinoOTA: actualizações de firmware via WiFi (sem desmontar
+//     o painel da parede). Hostname = PANEL_ID.
+//   - Comentários finais e estrutura limpa.
 //
-// Próximo (v2.52.62): mock client Python + OTA + docs finais.
+// Sistema completo. Próximos commits no firmware devem ser bug fixes
+// ou novas features (ex: brightness scheduling, festive modes).
 // ============================================================
 
 #include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include "config.h"
 #include "wifi_manager.h"
 #include "state_store.h"
 #include "supabase_realtime.h"
 #include "panel_renderer.h"
+
+// Setup do OTA — chamável após WiFi estar ligado
+static void setupOTA() {
+    ArduinoOTA.setHostname(PANEL_ID);
+    // Sem password por defeito. Adicionar OTA_PASSWORD em config.h se quiseres:
+    #ifdef OTA_PASSWORD
+        ArduinoOTA.setPassword(OTA_PASSWORD);
+    #endif
+    ArduinoOTA.onStart([]() {
+        Serial.println("[OTA] ⏬ A receber novo firmware...");
+    });
+    ArduinoOTA.onProgress([](unsigned int p, unsigned int t) {
+        static uint8_t lastPct = 255;
+        uint8_t pct = (p * 100) / t;
+        if (pct != lastPct) {
+            lastPct = pct;
+            Serial.printf("[OTA] %u%%\r", pct);
+        }
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\n[OTA] ✅ Concluído — vai reiniciar");
+    });
+    ArduinoOTA.onError([](ota_error_t e) {
+        Serial.printf("[OTA] ❌ Erro %u\n", e);
+    });
+    ArduinoOTA.begin();
+    Serial.printf("[OTA] Hostname=%s. Para actualizar via WiFi:\n", PANEL_ID);
+    Serial.println("       pio run -t upload --upload-port " + WiFi.localIP().toString());
+}
 
 // === CONFIGURAÇÃO FÍSICA DO PAINEL ===
 static const int PANEL_RES_X = 32;
@@ -95,9 +123,10 @@ void setup() {
     // 3. Iniciar WiFi (não bloqueia se falhar — tick() trata reconnect)
     bool wifiOk = WifiManager::begin();
 
-    // 4. 🆕 v2.52.60: iniciar cliente Realtime APÓS WiFi ter sido tentado.
-    // Mesmo se WiFi falhar agora, o tick do WS vai tentar e reconnect
-    // automático trata da retoma quando WiFi voltar.
+    // 4. 🆕 v2.52.62: OTA via WiFi (só se WiFi ok agora)
+    if (wifiOk) setupOTA();
+
+    // 5. Iniciar cliente Realtime APÓS WiFi ter sido tentado.
     SupabaseRealtime::begin(onStateUpdate);
 
     Serial.printf("[Setup] ✅ Pronto. WiFi=%s. Aguardo updates do Supabase.\n",
@@ -120,8 +149,8 @@ uint32_t lastStatusReport = 0;
 
 void loop() {
     WifiManager::tick();
-    // 🆕 v2.52.60: ticks do WSS Phoenix (eventos, heartbeat, reconnect)
     if (WifiManager::isConnected()) {
+        ArduinoOTA.handle();           // 🆕 v2.52.62: OTA listener
         SupabaseRealtime::tick();
     }
 
