@@ -4912,10 +4912,13 @@ function hasOtherActiveUsers() {
 function isEchoFromOwnSave() {
     if (isSaving || isSavingAll) return true;
     if (Date.now() < _savingAllGraceUntil) return true;
-    // 🔥 v2.52.32: defesa em profundidade — se não há outros users online, o
-    // event é forçosamente eco do próprio save (nenhum outro browser existe
-    // para o originar). Presence é a fonte de verdade confiável aqui.
-    if (!hasOtherActiveUsers()) return true;
+    // NOTA: a guarda anterior "!hasOtherActiveUsers() → return true" foi removida
+    // (v2.52.63). Era um falso positivo grave: se Person X inseria uma linha e
+    // fechava o browser, o Presence ficava vazio, e QUALQUER evento Realtime
+    // subsequente era silenciado como "eco" — mesmo sendo uma alteração legítima
+    // de X que ainda não tinha chegado à memória local. O save seguinte de
+    // qualquer utilizador apagava então as linhas de X sem registo no histórico.
+    // As duas guardas acima (isSavingAll + grace period) são suficientes.
     return false;
 }
 
