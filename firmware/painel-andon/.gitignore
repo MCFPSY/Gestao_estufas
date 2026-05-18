@@ -1,0 +1,21 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# VSCode
+.vscode/
+
+# Build outputs
+*.bin
+*.elf
+*.map
+
+# Per-device config (criado a partir do .example, contém WiFi password)
+include/config.h
+
+# OS
+.DS_Store
+Thumbs.db
