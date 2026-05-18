@@ -15,17 +15,17 @@ app web.
 
 ## Estado actual
 
-**v2.52.59 (commit 2/5)**: WiFi manager com reconnect + persistência do
-último estado em NVS (flash do ESP32). Painel mostra o último estado
-gravado ao arrancar — sobrevive a reboots/power-cuts. Ainda sem Supabase
-(vem no v2.52.60).
+**v2.52.60 (commit 3/5)**: Cliente Supabase Realtime totalmente
+funcional. O painel liga via WSS, faz join ao canal filtrado pelo
+`PANEL_ID`, e quando recebe UPDATE da BD, grava NVS + re-renderiza.
+Fluxo end-to-end pela primeira vez funcional.
 
 | Commit | Versão | Conteúdo |
 |---|---|---|
 | 1 | v2.52.58 | ✅ Setup PlatformIO + smoke test |
-| 2 | v2.52.59 | ✅ WiFi manager + persistência NVS (este) |
-| 3 | v2.52.60 | Cliente Supabase Realtime (Phoenix Channels) |
-| 4 | v2.52.61 | Render real de 3 zonas a partir da BD |
+| 2 | v2.52.59 | ✅ WiFi manager + persistência NVS |
+| 3 | v2.52.60 | ✅ Cliente Supabase Realtime (Phoenix Channels) (este) |
+| 4 | v2.52.61 | Polish render 1/2/3 zonas + fonte melhor |
 | 5 | v2.52.62 | Mock client Python + OTA + docs finais |
 
 ## Instalação (uma vez)
@@ -82,19 +82,28 @@ pio device monitor
 ```
 
 No monitor série deves ver:
-1. Banner "PSY/MCF Painel Andon — fw v2.52.59" + Panel ID
+1. Banner "PSY/MCF Painel Andon — fw v2.52.60" + Panel ID
 2. `[Panel] ✅ Inicializado`
-3. `[State] ... devolvo default` (primeiro boot) ou `Carregado do NVS` (boots seguintes)
+3. `[State] ... devolvo default` (primeiro boot) ou `Carregado do NVS`
 4. `[Render] layout=1 | Z1=verde "OK"`
 5. `[WiFi] A ligar a SSID '...'`
-6. `[WiFi] ✅ Ligado: 192.168.x.x` (se SSID/password no `config.h` estão correctos)
-7. A cada 30s: `[Loop] WiFi=🟢 IP=... layout=1 v=0`
+6. `[WiFi] ✅ Ligado: 192.168.x.x`
+7. `[Realtime] A ligar a wss://...supabase.co/realtime/v1/websocket?...`
+8. `[Realtime] 🟢 WS ligado, host=sawmdixlevjghlikvakv.supabase.co`
+9. `[Realtime] phx_reply status=ok topic=realtime:public:paineis_andon`
+10. `[Realtime] ✅ Canal subscrito`
+11. A cada 30s: `[Loop] WiFi=🟢 IP=... Realtime=🟢 layout=1 v=0`
 
-No painel: o último estado gravado em flash. Primeiro boot = "OK" verde
-a toda a largura (1 zona, 96×32).
+A partir daqui, **qualquer alteração** feita na app web ao painel deste
+ID (na tab "Organização Pavilhões") vai aparecer no painel físico em
+~1 segundo:
 
-A partir do v2.52.60, este último estado vai ser actualizado quando a
-app web mexer no Supabase.
+`[Realtime] 📨 postgres_changes recebido`
+`[Update] Recebido layout=2`
+`[State] 💾 Gravado: layout=2 version=...`
+`[Render] layout=2 | Z1=verde "OK" | Z2=vermelho "AVARIA"`
+
+E o painel acende em conformidade.
 
 ## Troubleshooting
 
@@ -117,7 +126,8 @@ firmware/painel-andon/
 │   ├── config.h.example       # template versionado
 │   └── config.h               # criado por ti, gitignored (tem WiFi password)
 └── src/
-    ├── main.cpp               # boot + render + loop principal
-    ├── wifi_manager.cpp/.h    # ligar/reconnect WiFi
-    └── state_store.cpp/.h     # persistência do último estado em NVS
+    ├── main.cpp                 # boot + render + loop principal + callback
+    ├── wifi_manager.cpp/.h      # ligar/reconnect WiFi
+    ├── state_store.cpp/.h       # persistência do último estado em NVS
+    └── supabase_realtime.cpp/.h # cliente Phoenix Channels (WSS)
 ```

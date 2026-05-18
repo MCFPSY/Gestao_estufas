@@ -1,21 +1,25 @@
 // ============================================================
-// PSY/MCF Painel Andon — firmware v2.52.59 (commit 2/5)
+// PSY/MCF Painel Andon — firmware v2.52.60 (commit 3/5)
 //
-// Acrescenta sobre o v2.52.58:
-//   - WiFi manager com reconnect (módulo wifi_manager)
-//   - Persistência do último estado em NVS (módulo state_store)
-//   - Renderização inicial a partir do que está em NVS
+// Acrescenta sobre o v2.52.59:
+//   - Cliente Supabase Realtime (Phoenix Channels sobre WSS)
+//   - Subscribe filtrado por PANEL_ID — só recebe updates da sua linha
+//   - Callback de update: grava NVS + re-renderiza
 //
-// Ainda NÃO liga ao Supabase Realtime — vem no v2.52.60.
-// Por enquanto o painel mostra o último estado guardado em flash, ou
-// "verde / OK" se nunca foi gravado.
+// Fluxo completo agora a funcionar:
+//   App browser → UPDATE Supabase → WAL → Phoenix broadcast →
+//   WSS → este firmware → render no painel
+//
+// Próximo (v2.52.61): polish do render para 1/2/3 zonas com fonte
+// melhorada e texto adaptado à largura.
 // ============================================================
 
 #include <Arduino.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
-#include "config.h"          // gerado por cada utilizador a partir do .example
+#include "config.h"
 #include "wifi_manager.h"
 #include "state_store.h"
+#include "supabase_realtime.h"
 
 // === CONFIGURAÇÃO FÍSICA DO PAINEL ===
 static const int PANEL_RES_X = 32;
@@ -93,6 +97,10 @@ void renderState() {
     Serial.println();
 }
 
+// --- Callback de novo estado recebido do Supabase ---
+// Forward-declared antes do setup() para uso em SupabaseRealtime::begin().
+void onStateUpdate(const StateStore::State& newState);
+
 // --- Boot ---
 
 void setup() {
@@ -130,9 +138,25 @@ void setup() {
     renderState();
 
     // 3. Iniciar WiFi (não bloqueia se falhar — tick() trata reconnect)
-    WifiManager::begin();
+    bool wifiOk = WifiManager::begin();
 
-    Serial.println("[Setup] ✅ Pronto. Próximo: v2.52.60 vai ligar ao Supabase.");
+    // 4. 🆕 v2.52.60: iniciar cliente Realtime APÓS WiFi ter sido tentado.
+    // Mesmo se WiFi falhar agora, o tick do WS vai tentar e reconnect
+    // automático trata da retoma quando WiFi voltar.
+    SupabaseRealtime::begin(onStateUpdate);
+
+    Serial.printf("[Setup] ✅ Pronto. WiFi=%s. Aguardo updates do Supabase.\n",
+                  wifiOk ? "🟢" : "🔴 (retry no loop)");
+}
+
+// --- Implementação da callback ---
+void onStateUpdate(const StateStore::State& newState) {
+    Serial.printf("[Update] Recebido layout=%u\n", (unsigned)newState.layout);
+    currentState = newState;
+    // Grava NVS antes de renderizar — se houver crash entre os 2 passos,
+    // no próximo boot mostra-se o estado correcto.
+    StateStore::save(currentState);
+    renderState();
 }
 
 // --- Loop ---
@@ -141,13 +165,18 @@ uint32_t lastStatusReport = 0;
 
 void loop() {
     WifiManager::tick();
+    // 🆕 v2.52.60: ticks do WSS Phoenix (eventos, heartbeat, reconnect)
+    if (WifiManager::isConnected()) {
+        SupabaseRealtime::tick();
+    }
 
     // Status de debug cada 30s (sai na v2.52.62 quando estiver estável)
     if (millis() - lastStatusReport > 30000) {
         lastStatusReport = millis();
-        Serial.printf("[Loop] WiFi=%s IP=%s layout=%u v=%u\n",
+        Serial.printf("[Loop] WiFi=%s IP=%s Realtime=%s layout=%u v=%u\n",
                       WifiManager::isConnected() ? "🟢" : "🔴",
                       WifiManager::getLocalIP().c_str(),
+                      SupabaseRealtime::isReady() ? "🟢" : "🔴",
                       (unsigned)currentState.layout,
                       (unsigned)currentState.version);
     }
