@@ -15,17 +15,17 @@ app web.
 
 ## Estado actual
 
-**v2.52.60 (commit 3/5)**: Cliente Supabase Realtime totalmente
-funcional. O painel liga via WSS, faz join ao canal filtrado pelo
-`PANEL_ID`, e quando recebe UPDATE da BD, grava NVS + re-renderiza.
-Fluxo end-to-end pela primeira vez funcional.
+**v2.52.61 (commit 4/5)**: Render polido — fonte size 2 (12×16 px)
+quando cabe, fallback a size 1 + truncamento se a mensagem é maior
+que a zona. Pixels de "leftover" da divisão dão à última zona (não
+ficam por preencher na orla direita).
 
 | Commit | Versão | Conteúdo |
 |---|---|---|
 | 1 | v2.52.58 | ✅ Setup PlatformIO + smoke test |
 | 2 | v2.52.59 | ✅ WiFi manager + persistência NVS |
-| 3 | v2.52.60 | ✅ Cliente Supabase Realtime (Phoenix Channels) (este) |
-| 4 | v2.52.61 | Polish render 1/2/3 zonas + fonte melhor |
+| 3 | v2.52.60 | ✅ Cliente Supabase Realtime (Phoenix Channels) |
+| 4 | v2.52.61 | ✅ Render polido (fontes adaptadas + truncamento) (este) |
 | 5 | v2.52.62 | Mock client Python + OTA + docs finais |
 
 ## Instalação (uma vez)
@@ -126,8 +126,9 @@ firmware/painel-andon/
 │   ├── config.h.example       # template versionado
 │   └── config.h               # criado por ti, gitignored (tem WiFi password)
 └── src/
-    ├── main.cpp                 # boot + render + loop principal + callback
+    ├── main.cpp                 # boot + loop principal + callback de update
     ├── wifi_manager.cpp/.h      # ligar/reconnect WiFi
     ├── state_store.cpp/.h       # persistência do último estado em NVS
-    └── supabase_realtime.cpp/.h # cliente Phoenix Channels (WSS)
+    ├── supabase_realtime.cpp/.h # cliente Phoenix Channels (WSS)
+    └── panel_renderer.cpp/.h    # render visual de 1/2/3 zonas com fonte adaptada
 ```

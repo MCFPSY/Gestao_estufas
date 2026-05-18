@@ -1,17 +1,15 @@
 // ============================================================
-// PSY/MCF Painel Andon — firmware v2.52.60 (commit 3/5)
+// PSY/MCF Painel Andon — firmware v2.52.61 (commit 4/5)
 //
-// Acrescenta sobre o v2.52.59:
-//   - Cliente Supabase Realtime (Phoenix Channels sobre WSS)
-//   - Subscribe filtrado por PANEL_ID — só recebe updates da sua linha
-//   - Callback de update: grava NVS + re-renderiza
+// Acrescenta sobre v2.52.60:
+//   - Módulo panel_renderer dedicado, com:
+//       • Fonte size 2 (12×16 px) quando texto cabe — muito mais legível
+//       • Fallback automático para size 1 quando não cabe
+//       • Truncamento com "." se mensagem é maior que a zona
+//       • Pixels extras dados à última zona (96/3 = 32×3, 96/2 = 48×2, OK)
+//   - main.cpp simplificado: delega ao panel_renderer.render()
 //
-// Fluxo completo agora a funcionar:
-//   App browser → UPDATE Supabase → WAL → Phoenix broadcast →
-//   WSS → este firmware → render no painel
-//
-// Próximo (v2.52.61): polish do render para 1/2/3 zonas com fonte
-// melhorada e texto adaptado à largura.
+// Próximo (v2.52.62): mock client Python + OTA + docs finais.
 // ============================================================
 
 #include <Arduino.h>
@@ -20,6 +18,7 @@
 #include "wifi_manager.h"
 #include "state_store.h"
 #include "supabase_realtime.h"
+#include "panel_renderer.h"
 
 // === CONFIGURAÇÃO FÍSICA DO PAINEL ===
 static const int PANEL_RES_X = 32;
@@ -45,56 +44,9 @@ static const int CLK_PIN = 34;
 MatrixPanel_I2S_DMA *display = nullptr;
 StateStore::State    currentState;
 
-// --- Helpers de cor / render ---
-
-static uint16_t bgForEstado(const char* estado) {
-    if (!estado) return display->color565(120, 120, 120);
-    if (strcmp(estado, "verde") == 0)    return display->color565(0,   200, 0);
-    if (strcmp(estado, "amarelo") == 0)  return display->color565(255, 165, 0);
-    if (strcmp(estado, "vermelho") == 0) return display->color565(255, 0,   0);
-    return display->color565(120, 120, 120);
-}
-
-static uint16_t fgForEstado(const char* estado) {
-    // Amarelo + texto escuro lê-se melhor
-    if (estado && strcmp(estado, "amarelo") == 0) return display->color565(0, 0, 0);
-    return display->color565(255, 255, 255);
-}
-
-// Renderiza no painel o currentState. Texto centrado em cada zona.
-void renderState() {
-    if (!display) return;
-    const int TOTAL_W = PANEL_RES_X * PANEL_CHAIN;
-    const int H       = PANEL_RES_Y;
-    int layout = currentState.layout;
-    if (layout < 1) layout = 1;
-    if (layout > 3) layout = 3;
-    const int zoneW = TOTAL_W / layout;
-
-    display->clearScreen();
-    for (int i = 0; i < layout; i++) {
-        const auto& z = currentState.zonas[i];
-        int x0 = i * zoneW;
-        display->fillRect(x0, 0, zoneW, H, bgForEstado(z.estado));
-        display->setTextColor(fgForEstado(z.estado));
-        display->setTextSize(1);
-        // Bitmap font default: 6x8 px por caractere
-        int textW = (int)strlen(z.mensagem) * 6;
-        int x = x0 + (zoneW - textW) / 2;
-        int y = (H - 8) / 2;
-        if (x < x0 + 1) x = x0 + 1; // se não cabe, alinha à esquerda
-        display->setCursor(x, y);
-        display->print(z.mensagem);
-    }
-
-    Serial.print("[Render] layout=");
-    Serial.print(layout);
-    for (int i = 0; i < layout; i++) {
-        Serial.printf(" | Z%d=%s \"%s\"", i + 1,
-                      currentState.zonas[i].estado,
-                      currentState.zonas[i].mensagem);
-    }
-    Serial.println();
+// Wrapper para manter API existente — delega ao PanelRenderer
+static inline void renderState() {
+    PanelRenderer::render(currentState);
 }
 
 // --- Callback de novo estado recebido do Supabase ---
@@ -132,6 +84,9 @@ void setup() {
         display->clearScreen();
         Serial.println("[Panel] ✅ Inicializado");
     }
+
+    // 🆕 v2.52.61: registar display no renderer
+    PanelRenderer::begin(display, PANEL_RES_X * PANEL_CHAIN, PANEL_RES_Y);
 
     // 2. Carregar último estado do NVS e mostrar imediatamente
     currentState = StateStore::load();
