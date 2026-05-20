@@ -1,18 +1,31 @@
 #!/usr/bin/env node
 /**
  * PSY Gestão — Envio diário de cargas por WhatsApp (Twilio)
- * Gera imagem do mapa de cargas do dia e envia para lista de números.
+ * v2.52.63: Adaptado para usar Content Templates aprovados pela Meta.
+ *
+ * Caminho de produção: TWILIO_FROM=whatsapp:+15559582520 + USE_TEMPLATES=true
+ * Caminho legacy (sandbox): TWILIO_FROM=whatsapp:+14155238886 + USE_TEMPLATES=false
  *
  * Variáveis de ambiente necessárias:
- *   TWILIO_SID, TWILIO_TOKEN, TWILIO_FROM (whatsapp:+14155238886)
+ *   TWILIO_SID, TWILIO_TOKEN
+ *   TWILIO_FROM     (whatsapp:+15559582520 em produção)
  *   SUPABASE_URL, SUPABASE_KEY
  *   WHATSAPP_NUMBERS (comma-separated: +351937742261,+351912345678)
+ *
+ * Variáveis opcionais:
+ *   USE_TEMPLATES  ("true" por defeito; "false" volta ao modo freeform legacy)
  */
 
 import puppeteer from 'puppeteer';
 import { createClient } from '@supabase/supabase-js';
 import fs from 'fs';
 import path from 'path';
+
+// ── Content SIDs dos templates aprovados ─────────────────
+// Templates Meta-approved, categoria Utility, idioma pt_PT.
+// Approved on May 20, 2026 — sincronização Meta→Twilio confirmada.
+const CONTENT_SID_COM_CARGA = 'HXc28c4818717f1ef1245d1a587bb5d4cb';
+const CONTENT_SID_SEM_CARGA = 'HX8d356cef3fc779590b9219839ce1d592';
 
 const {
     TWILIO_SID,
@@ -21,12 +34,18 @@ const {
     SUPABASE_URL,
     SUPABASE_KEY,
     WHATSAPP_NUMBERS,
+    USE_TEMPLATES = 'true',
 } = process.env;
+
+const useTemplates = USE_TEMPLATES.toLowerCase() !== 'false';
 
 if (!TWILIO_SID || !TWILIO_TOKEN || !SUPABASE_URL || !SUPABASE_KEY || !WHATSAPP_NUMBERS) {
     console.error('❌ Variáveis de ambiente em falta. Necessárias: TWILIO_SID, TWILIO_TOKEN, SUPABASE_URL, SUPABASE_KEY, WHATSAPP_NUMBERS');
     process.exit(1);
 }
+
+console.log(`⚙️  Modo: ${useTemplates ? 'TEMPLATES (produção)' : 'FREEFORM (sandbox legacy)'}`);
+console.log(`📞 From: ${TWILIO_FROM}`);
 
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -223,13 +242,31 @@ async function uploadImage(buffer, filename) {
 }
 
 // ── Send WhatsApp via Twilio ─────────────────────────────
-
-async function sendWhatsApp(to, body, mediaUrl) {
+// 🆕 v2.52.63: suporta 2 modos — Content Template (produção) ou Freeform (sandbox).
+// Modo Template: passar { to, contentSid, contentVariables, mediaUrl? }
+// Modo Freeform: passar { to, body, mediaUrl? }
+async function sendWhatsApp({ to, body, mediaUrl, contentSid, contentVariables }) {
     const params = new URLSearchParams();
     params.append('To', `whatsapp:${to}`);
     params.append('From', TWILIO_FROM);
-    params.append('Body', body);
-    if (mediaUrl) params.append('MediaUrl', mediaUrl);
+
+    if (contentSid) {
+        // ── Modo TEMPLATE ──
+        params.append('ContentSid', contentSid);
+        if (contentVariables && Object.keys(contentVariables).length > 0) {
+            params.append('ContentVariables', JSON.stringify(contentVariables));
+        }
+        // MediaUrl override: a Twilio aceita esta param mesmo com ContentSid,
+        // mas o template tem de ter media variável para o override funcionar.
+        // Se template tem media estática, este parâmetro é ignorado.
+        if (mediaUrl) {
+            params.append('MediaUrl', mediaUrl);
+        }
+    } else {
+        // ── Modo FREEFORM (legacy sandbox) ──
+        if (body) params.append('Body', body);
+        if (mediaUrl) params.append('MediaUrl', mediaUrl);
+    }
 
     const resp = await fetch(
         `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
@@ -243,7 +280,7 @@ async function sendWhatsApp(to, body, mediaUrl) {
         }
     );
     const result = await resp.json();
-    if (result.error_code) throw new Error(`Twilio error: ${result.error_message}`);
+    if (result.error_code) throw new Error(`Twilio error ${result.error_code}: ${result.error_message}`);
     return result;
 }
 
@@ -260,16 +297,33 @@ async function main() {
     const blocks = buildTransportBlocks(rows);
     console.log(`🚚 ${blocks.length} entregas agrupadas`);
 
+    const numbers = WHATSAPP_NUMBERS.split(',').map(n => n.trim());
+    const dateWithDay = `${dateStr} (${dayName})`;
+
+    // ─── SEM CARGAS ───
     if (blocks.length === 0) {
         console.log('⚠️ Sem cargas para hoje. Enviando aviso...');
-        const numbers = WHATSAPP_NUMBERS.split(',').map(n => n.trim());
         for (const num of numbers) {
-            await sendWhatsApp(num, `📅 ${dateStr} (${dayName})\n\n✅ Sem cargas programadas para hoje.`);
-            console.log(`✅ Aviso enviado para ${num}`);
+            if (useTemplates) {
+                const result = await sendWhatsApp({
+                    to: num,
+                    contentSid: CONTENT_SID_SEM_CARGA,
+                    contentVariables: { '1': dateWithDay },
+                });
+                console.log(`✅ Aviso (template) enviado para ${num} — SID ${result.sid}`);
+            } else {
+                const result = await sendWhatsApp({
+                    to: num,
+                    body: `📅 ${dateWithDay}\n\n✅ Sem cargas programadas para hoje.`,
+                });
+                console.log(`✅ Aviso (freeform) enviado para ${num} — SID ${result.sid}`);
+            }
         }
+        console.log('🎉 Concluído!');
         return;
     }
 
+    // ─── COM CARGAS ───
     // 3. Generate HTML & screenshot
     const html = generateCargasHtml(blocks, dateStr, dayName);
     console.log('🖼️ Gerando imagem...');
@@ -282,13 +336,27 @@ async function main() {
     console.log(`✅ Imagem: ${imageUrl}`);
 
     // 5. Send to all numbers
-    const numbers = WHATSAPP_NUMBERS.split(',').map(n => n.trim());
     const totalPallets = blocks.reduce((s, b) => s + b.totalQtd, 0);
-    const body = `🚚 *Cargas ${dateStr} (${dayName})*\n\n📦 ${blocks.length} entrega(s) | ${totalPallets.toLocaleString('pt-PT')} paletes\n\n_PSY Gestão de Estufas_`;
+    const totalPalletsStr = totalPallets.toLocaleString('pt-PT');
 
     for (const num of numbers) {
-        const result = await sendWhatsApp(num, body, imageUrl);
-        console.log(`✅ Enviado para ${num} (SID: ${result.sid})`);
+        if (useTemplates) {
+            const result = await sendWhatsApp({
+                to: num,
+                contentSid: CONTENT_SID_COM_CARGA,
+                contentVariables: {
+                    '1': dateWithDay,
+                    '2': String(blocks.length),
+                    '3': totalPalletsStr,
+                },
+                mediaUrl: imageUrl, // override do media — depende do template aceitar
+            });
+            console.log(`✅ Cargas (template) enviado para ${num} — SID ${result.sid}`);
+        } else {
+            const body = `🚚 *Cargas ${dateWithDay}*\n\n📦 ${blocks.length} entrega(s) | ${totalPalletsStr} paletes\n\n_PSY Gestão de Estufas_`;
+            const result = await sendWhatsApp({ to: num, body, mediaUrl: imageUrl });
+            console.log(`✅ Cargas (freeform) enviado para ${num} — SID ${result.sid}`);
+        }
     }
 
     console.log('🎉 Concluído!');
